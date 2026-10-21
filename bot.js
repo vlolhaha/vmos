@@ -167,62 +167,65 @@ export async function runBot(config, socket, onDone) {
         });
 
         // ============================================================
-        // BƯỚC 4: Đăng ký (Popup Sign-in)
+        // BƯỚC 4: Đăng ký (Popup Login)
         // ============================================================
         setStep(4, 'Đăng ký tài khoản (Popup)');
         log('🌐 Mở trang chủ VMOS...');
-        await page.goto('https://www.vmoscloud.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await sleep(5000); // Chờ SPA load xong
+        await page.goto('https://cloud.vmoscloud.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await sleep(5000);
 
-        // Tìm và click nút Sign in
-        log('🔎 Tìm nút "Sign in" / "Đăng nhập"...');
-        const signInClicked = await page.evaluate(() => {
-            const patterns = [/^sign\s*in$/i, /^log\s*in$/i, /^login$/i, /^đăng\s*nhập$/i, /sign\s*in/i];
-            const candidates = [...document.querySelectorAll('button, a, [role="button"], [class*="login"]')];
-            
-            for (const el of candidates) {
-                if (el.offsetParent === null) continue;
-                const text = (el.innerText || el.textContent || '').trim();
-                if (patterns.some(p => p.test(text))) {
-                    el.click();
-                    return { clicked: true, text };
-                }
-            }
-            return { clicked: false };
+        // Kiểm tra popup đã tự mở chưa
+        log('🔎 Kiểm tra popup login...');
+        const popupAlreadyOpen = await page.evaluate(() => {
+            const dlg = document.querySelector('#login-dialog');
+            return !!(dlg && dlg.offsetParent !== null);
         });
 
-        if (!signInClicked.clicked) {
-            log('⚠️ Không tìm thấy bằng text. Thử selector fallback...');
-            const fallback = ['.login-btn', '[class*="signin"]', 'header button'];
-            for (const sel of fallback) {
-                const el = await page.$(sel);
-                if (el) { await el.click(); break; }
-            }
+        if (!popupAlreadyOpen) {
+            log('🖱️ Popup chưa mở, tìm nút Sign in...');
+            const clicked = await page.evaluate(() => {
+                const candidates = [...document.querySelectorAll('button, a, [role="button"]')];
+                for (const el of candidates) {
+                    if (el.offsetParent === null) continue;
+                    const text = (el.innerText || el.textContent || '').trim();
+                    if (/^(sign|log)\s*in$|^đăng\s*nhập$|^login$/i.test(text)) {
+                        el.click();
+                        return text;
+                    }
+                }
+                return null;
+            });
+            log(clicked ? `✓ Clicked: "${clicked}"` : '⚠️ Không thấy nút Sign in');
+            await sleep(3000);
         } else {
-            log(`✓ Đã click: "${signInClicked.text}"`);
+            log('✓ Popup đã tự mở');
         }
-        await sleep(3000);
 
-        // Chờ popup
+        // Chờ popup login hiện
         log('⏳ Chờ popup login...');
-        await page.waitForSelector('.el-dialog, [role="dialog"], .modal', { timeout: 10000 }).catch(() => {});
+        await page.waitForSelector('#login-dialog', { timeout: 15000 });
         await sleep(2000);
 
-        // Tìm ô email
+        // Tìm ô email (type="text" + class el-input__inner)
         log('🔎 Tìm ô nhập email...');
         const emailSelectors = [
-            'input[type="email"]',
-            'input[name="email"]',
-            'input[placeholder*="mail" i]',
-            'input[placeholder*="email" i]'
+            '#login-dialog input.el-input__inner',
+            '#login-dialog input[placeholder*="email" i]',
+            '#login-dialog input[placeholder*="mail" i]',
+            '#login-dialog input[placeholder*="địa chỉ" i]'
         ];
+
         let emailInput = null;
         for (const sel of emailSelectors) {
             const els = await page.$$(sel);
             for (const el of els) {
-                if (await el.evaluate(n => n.offsetParent !== null)) { emailInput = el; break; }
+                if (await el.evaluate(n => n.offsetParent !== null)) {
+                    emailInput = el;
+                    log(`✓ Tìm thấy email: ${sel}`);
+                    break;
+                }
             }
-            if (emailInput) { log(`✓ Thấy input: ${sel}`); break; }
+            if (emailInput) break;
         }
 
         if (!emailInput) {
@@ -236,32 +239,53 @@ export async function runBot(config, socket, onDone) {
         await sleep(500);
         log(`✓ Đã điền email: ${mail.address}`);
 
-        // Click nút tiếp tục / gửi mã
-        log('🖱️ Click nút tiếp tục (Get code / Continue)...');
-        const submitClicked = await page.evaluate(() => {
-            const patterns = [/get\s*code/i, /continue/i, /next/i, /gửi\s*mã/i, /tiếp\s*tục/i, /đăng\s*ký/i];
-            const containers = document.querySelectorAll('[role="dialog"], .el-dialog, .modal');
-            let allBtns = [];
-            for (const c of containers) allBtns.push(...c.querySelectorAll('button'));
-            if (allBtns.length === 0) allBtns = [...document.querySelectorAll('button')];
-
-            for (const btn of allBtns) {
-                if (btn.offsetParent === null) continue;
-                const text = (btn.innerText || '').trim();
-                if (patterns.some(p => p.test(text))) { btn.click(); return true; }
-            }
-            return false;
+        // Check TOS checkbox (2 ảnh, ảnh nào display:none là ẩn)
+        const tosInfo = await page.evaluate(() => {
+            const imgs = document.querySelectorAll('#login-dialog .tos img');
+            if (imgs.length === 0) return { found: false };
+            const visible = [...imgs].map(i => i.style.display !== 'none');
+            return { found: true, count: imgs.length, visible };
         });
 
-        if (!submitClicked) {
-            log('⚠️ Không thấy nút, thử nhấn Enter...');
-            await emailInput.press('Enter');
+        if (tosInfo.found) {
+            log(`📋 TOS: ${tosInfo.count} ảnh, visible=${JSON.stringify(tosInfo.visible)}`);
+            const isChecked = tosInfo.visible[tosInfo.count - 1] === true;
+            if (!isChecked) {
+                log('☑️ Click TOS checkbox...');
+                await page.evaluate(() => {
+                    const firstImg = document.querySelector('#login-dialog .tos img');
+                    firstImg?.click();
+                });
+                await sleep(500);
+            } else {
+                log('✓ TOS đã check sẵn');
+            }
+        }
+
+        // Click nút "Đăng nhập/Đăng ký"
+        log('🖱️ Click "Đăng nhập/Đăng ký"...');
+        const submitText = await page.evaluate(() => {
+            const btns = [...document.querySelectorAll('#login-dialog button')];
+            for (const btn of btns) {
+                if (btn.offsetParent === null) continue;
+                const text = (btn.innerText || '').trim();
+                if (/đăng\s*nhập|đăng\s*ký|login|sign|continue|get\s*code|xác\s*nhận/i.test(text)) {
+                    btn.click();
+                    return text.slice(0, 60);
+                }
+            }
+            return null;
+        });
+
+        if (submitText) {
+            log(`✓ Đã click: "${submitText}"`);
         } else {
-            log('✓ Đã click nút gửi mã');
+            log('⚠️ Không thấy nút submit, thử Enter...');
+            await emailInput.press('Enter');
         }
 
         // ============================================================
-        // BƯỚC 5: Giải Captcha
+        // BƯỚC 5: Giải Aliyun Captcha
         // ============================================================
         setStep(5, 'Giải Aliyun Captcha');
         log('⏳ Chờ captcha data...');
@@ -302,7 +326,7 @@ export async function runBot(config, socket, onDone) {
 
         log('🖱️ Xác nhận OTP...');
         await page.evaluate(() => {
-            const btn = [...document.querySelectorAll('button')].find(b => /xác nhận|xác minh|confirm|verify|hoàn tất/i.test(b.innerText));
+            const btn = [...document.querySelectorAll('button')].find(b => /xác nhận|xác minh|confirm|verify|tiếp tục|hoàn tất/i.test(b.innerText));
             btn?.click();
         });
         await sleep(8000);
@@ -315,7 +339,7 @@ export async function runBot(config, socket, onDone) {
         const newPassword = 'Vmos@' + Math.random().toString(36).slice(2, 10) + 'A1';
         log('🔐 Password mới: ' + newPassword);
 
-        await page.goto('https://www.vmoscloud.com/settings', { waitUntil: 'domcontentloaded' });
+        await page.goto('https://cloud.vmoscloud.com/settings', { waitUntil: 'domcontentloaded' });
         await sleep(3000);
 
         log('🖱️ Click "Thay đổi mật khẩu"...');
@@ -335,7 +359,7 @@ export async function runBot(config, socket, onDone) {
         log('⏳ Chờ OTP đổi password...');
         const resetOTP = await pollOTP(mail.token, log, {
             timeout: 180000,
-            skipCount: 1, // Bỏ qua OTP signup
+            skipCount: 1,
             since: resetOTPTimeStart
         });
 
@@ -357,7 +381,7 @@ export async function runBot(config, socket, onDone) {
         // BƯỚC 9: Claim trial
         // ============================================================
         setStep(9, 'Claim trial cloud phone');
-        await page.goto('https://www.vmoscloud.com/', { waitUntil: 'domcontentloaded' });
+        await page.goto('https://cloud.vmoscloud.com/', { waitUntil: 'domcontentloaded' });
         await sleep(4000);
 
         log('🖱️ Click "Try a cloud phone"...');
@@ -367,14 +391,18 @@ export async function runBot(config, socket, onDone) {
             btn.click();
             return true;
         });
-        if (claimed) { log('✓ Clicked trial'); await sleep(5000); }
-        else { log('⚠️ Không thấy nút trial (có thể đã claim)'); }
+        if (claimed) {
+            log('✓ Clicked trial');
+            await sleep(5000);
+        } else {
+            log('⚠️ Không thấy nút trial (có thể đã claim)');
+        }
 
         // ============================================================
         // BƯỚC 10: Logout
         // ============================================================
         setStep(10, 'Logout + cleanup');
-        await page.goto('https://www.vmoscloud.com/settings', { waitUntil: 'domcontentloaded' });
+        await page.goto('https://cloud.vmoscloud.com/settings', { waitUntil: 'domcontentloaded' });
         await sleep(2500);
 
         await page.evaluate(() => {
