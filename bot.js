@@ -118,8 +118,8 @@ export async function runBot(config, socket, onDone) {
         // ============================================================
         // BƯỚC 2: Mail.tm
         // ============================================================
-        setStep(2, 'Tạo email mail.tm');
-        mail = await createMail(log);
+        setStep(2, 'Tạo email mail');
+        mail = await createMail(log); // Trả về { address, password, token, baseUrl, provider }
 
         // ============================================================
         // BƯỚC 3: Launch browser
@@ -307,10 +307,13 @@ export async function runBot(config, socket, onDone) {
         await sleep(2000);
 
         // ============================================================
-        // BƯỚC 6: Chờ OTP signup
+        // BƯỚC 6: Chờ OTP signup (Dùng baseUrl từ mail object)
         // ============================================================
         setStep(6, 'Chờ OTP đăng ký');
-        const signupOTP = await pollOTP(mail.token, log, { timeout: 180000 });
+        const signupOTP = await pollOTP(mail.token, log, {
+            timeout: 180000,
+            baseUrl: mail.baseUrl // <--- Truyền baseUrl động (mail.tm hoặc mail.gw)
+        });
 
         // ============================================================
         // BƯỚC 7: Điền OTP
@@ -360,7 +363,8 @@ export async function runBot(config, socket, onDone) {
         const resetOTP = await pollOTP(mail.token, log, {
             timeout: 180000,
             skipCount: 1,
-            since: resetOTPTimeStart
+            since: resetOTPTimeStart,
+            baseUrl: mail.baseUrl // <--- Truyền baseUrl động (mail.tm hoặc mail.gw)
         });
 
         log('⌨️  Điền OTP + pass mới...');
@@ -419,6 +423,7 @@ export async function runBot(config, socket, onDone) {
             email: mail.address,
             password: newPassword,
             mailPassword: mail.password,
+            provider: mail.provider,
             timestamp: new Date().toISOString()
         };
 
