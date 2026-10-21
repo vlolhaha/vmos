@@ -1,6 +1,6 @@
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
-import { createMail, pollOTP } from './lib/mailtm.js';
+import { createMail } from './lib/mailtm.js';
 import { solveAliyunPuzzle } from './lib/aliyun-captcha.js';
 import { prepareProxy, stopProxy } from './lib/proxy.js';
 import { ensureDisplay, ensureWarpService } from './lib/env-check.js';
@@ -8,7 +8,7 @@ import { ensureDisplay, ensureWarpService } from './lib/env-check.js';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ============================================================
-// TÌM BROWSER (Hỗ trợ Chromium trên Kali)
+// TÌM BROWSER
 // ============================================================
 function findBrowser(config) {
     if (config.browserPath && fs.existsSync(config.browserPath)) {
@@ -46,11 +46,11 @@ function findBrowser(config) {
 async function launchBrowser(config, proxyInfo, log) {
     if (process.platform === 'linux' && !config.headless) {
         const hasDisplay = await ensureDisplay(log);
-        if (!hasDisplay) throw new Error('Không có DISPLAY để chạy Chromium headful. Chạy: apt install -y xvfb');
+        if (!hasDisplay) throw new Error('Không có DISPLAY. Chạy: apt install -y xvfb');
     }
 
     const found = findBrowser(config);
-    if (!found) throw new Error('Không tìm thấy Chromium/Chrome. Cài đặt: apt install -y chromium');
+    if (!found) throw new Error('Không tìm thấy Chromium/Chrome. Cài: apt install -y chromium');
 
     log(`🌐 Browser: ${found.name} — ${found.path}`);
 
@@ -116,10 +116,11 @@ export async function runBot(config, socket, onDone) {
         proxyInfo = await prepareProxy(log, { warp: useWarp });
 
         // ============================================================
-        // BƯỚC 2: Mail.tm
+        // BƯỚC 2: Tạo mail (multi-provider)
         // ============================================================
-        setStep(2, 'Tạo email mail');
-        mail = await createMail(log); // Trả về { address, password, token, baseUrl, provider }
+        setStep(2, 'Tạo email');
+        mail = await createMail(log); // { provider, address, password, pollOTP(opts) }
+        log(`📧 Provider: ${mail.provider} | Email: ${mail.address}`);
 
         // ============================================================
         // BƯỚC 3: Launch browser
@@ -130,7 +131,6 @@ export async function runBot(config, socket, onDone) {
         const [page] = await browser.pages();
         if (!page) throw new Error('Không có page nào được mở');
 
-        // Anti-detect inject
         await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             window.chrome = { runtime: {} };
@@ -174,7 +174,6 @@ export async function runBot(config, socket, onDone) {
         await page.goto('https://cloud.vmoscloud.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
         await sleep(5000);
 
-        // Kiểm tra popup đã tự mở chưa
         log('🔎 Kiểm tra popup login...');
         const popupAlreadyOpen = await page.evaluate(() => {
             const dlg = document.querySelector('#login-dialog');
@@ -201,12 +200,10 @@ export async function runBot(config, socket, onDone) {
             log('✓ Popup đã tự mở');
         }
 
-        // Chờ popup login hiện
         log('⏳ Chờ popup login...');
         await page.waitForSelector('#login-dialog', { timeout: 15000 });
         await sleep(2000);
 
-        // Tìm ô email (type="text" + class el-input__inner)
         log('🔎 Tìm ô nhập email...');
         const emailSelectors = [
             '#login-dialog input.el-input__inner',
@@ -230,16 +227,14 @@ export async function runBot(config, socket, onDone) {
 
         if (!emailInput) {
             await page.screenshot({ path: 'debug-step4.png', fullPage: true });
-            throw new Error('Không tìm thấy ô email trong popup. Xem debug-step4.png');
+            throw new Error('Không tìm thấy ô email. Xem debug-step4.png');
         }
 
-        // Điền email
         await emailInput.click({ clickCount: 3 });
         await emailInput.type(mail.address, { delay: 40 });
         await sleep(500);
         log(`✓ Đã điền email: ${mail.address}`);
 
-        // Check TOS checkbox (2 ảnh, ảnh nào display:none là ẩn)
         const tosInfo = await page.evaluate(() => {
             const imgs = document.querySelectorAll('#login-dialog .tos img');
             if (imgs.length === 0) return { found: false };
@@ -262,7 +257,6 @@ export async function runBot(config, socket, onDone) {
             }
         }
 
-        // Click nút "Đăng nhập/Đăng ký"
         log('🖱️ Click "Đăng nhập/Đăng ký"...');
         const submitText = await page.evaluate(() => {
             const btns = [...document.querySelectorAll('#login-dialog button')];
@@ -297,7 +291,7 @@ export async function runBot(config, socket, onDone) {
 
         if (!initCaptcha || !imageBuffers.back || !imageBuffers.shadow) {
             await page.screenshot({ path: 'debug-step5.png', fullPage: true });
-            throw new Error('Không bắt được captcha data. Xem debug-step5.png');
+            throw new Error('Không bắt được captcha. Xem debug-step5.png');
         }
         log('✓ Đã có captcha data');
 
@@ -307,13 +301,10 @@ export async function runBot(config, socket, onDone) {
         await sleep(2000);
 
         // ============================================================
-        // BƯỚC 6: Chờ OTP signup (Dùng baseUrl từ mail object)
+        // BƯỚC 6: Chờ OTP signup (dùng method của mail object)
         // ============================================================
         setStep(6, 'Chờ OTP đăng ký');
-        const signupOTP = await pollOTP(mail.token, log, {
-            timeout: 180000,
-            baseUrl: mail.baseUrl // <--- Truyền baseUrl động (mail.tm hoặc mail.gw)
-        });
+        const signupOTP = await mail.pollOTP({ timeout: 180000 });
 
         // ============================================================
         // BƯỚC 7: Điền OTP
@@ -360,11 +351,10 @@ export async function runBot(config, socket, onDone) {
         await sleep(2000);
 
         log('⏳ Chờ OTP đổi password...');
-        const resetOTP = await pollOTP(mail.token, log, {
+        const resetOTP = await mail.pollOTP({
             timeout: 180000,
             skipCount: 1,
-            since: resetOTPTimeStart,
-            baseUrl: mail.baseUrl // <--- Truyền baseUrl động (mail.tm hoặc mail.gw)
+            since: resetOTPTimeStart
         });
 
         log('⌨️  Điền OTP + pass mới...');
@@ -430,7 +420,8 @@ export async function runBot(config, socket, onDone) {
         log('');
         log('════════════════════════════════════════════');
         log('✅ HOÀN TẤT');
-        log(`📋 Format: ${result.email}|${result.password}|${result.mailPassword}`);
+        log(`📧 Provider: ${result.provider}`);
+        log(`📋 Format: ${result.email}|${result.password}|${result.mailPassword || '(no password)'}`);
         log('════════════════════════════════════════════');
 
         socket.emit('result', result);
@@ -442,7 +433,7 @@ export async function runBot(config, socket, onDone) {
             if (pages?.[0]) {
                 const p = `error-${Date.now()}.png`;
                 await pages[0].screenshot({ path: p, fullPage: true });
-                log(`📸 Đã lưu ảnh lỗi: ${p}`);
+                log(`📸 Screenshot: ${p}`);
             }
         } catch {}
         socket.emit('error', e.message);
