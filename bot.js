@@ -8,10 +8,9 @@ import { ensureDisplay, ensureWarpService } from './lib/env-check.js';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ============================================================
-// FIND BROWSER — support Chromium trên Kali
+// TÌM BROWSER (Hỗ trợ Chromium trên Kali)
 // ============================================================
 function findBrowser(config) {
-    // User cung cấp path qua UI
     if (config.browserPath && fs.existsSync(config.browserPath)) {
         return { path: config.browserPath, name: 'custom' };
     }
@@ -21,46 +20,18 @@ function findBrowser(config) {
 
     const paths = {
         chromium: {
-            linux: [
-                '/usr/bin/chromium',
-                '/usr/bin/chromium-browser',
-                '/usr/lib/chromium/chromium',
-                '/snap/bin/chromium'
-            ],
+            linux: ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium'],
             darwin: ['/Applications/Chromium.app/Contents/MacOS/Chromium'],
-            win32: [
-                'C:\\Program Files\\Chromium\\Application\\chrome.exe',
-                process.env.LOCALAPPDATA + '\\Chromium\\Application\\chrome.exe'
-            ]
+            win32: ['C:\\Program Files\\Chromium\\Application\\chrome.exe']
         },
         chrome: {
-            linux: [
-                '/usr/bin/google-chrome',
-                '/usr/bin/google-chrome-stable'
-            ],
+            linux: ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable'],
             darwin: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
-            win32: [
-                'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-                'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-                process.env.LOCALAPPDATA + '\\Google\\Chrome\\Application\\chrome.exe'
-            ]
-        },
-        edge: {
-            linux: ['/usr/bin/microsoft-edge', '/usr/bin/microsoft-edge-stable'],
-            darwin: ['/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'],
-            win32: [
-                'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-                'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
-            ]
+            win32: ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe']
         }
     };
 
-    // Thứ tự ưu tiên: chromium (Linux) → chrome → edge
-    const order = config.browser === 'edge' ? ['edge', 'chrome', 'chromium']
-        : config.browser === 'chrome' ? ['chrome', 'chromium', 'edge']
-        : config.browser === 'chromium' ? ['chromium', 'chrome', 'edge']
-        : ['chromium', 'chrome', 'edge'];
-
+    const order = ['chromium', 'chrome'];
     for (const name of order) {
         for (const p of paths[name][process.platform] || []) {
             if (p && fs.existsSync(p)) return { path: p, name };
@@ -73,29 +44,16 @@ function findBrowser(config) {
 // LAUNCH BROWSER
 // ============================================================
 async function launchBrowser(config, proxyInfo, log) {
-    // Trên Linux, ensure DISPLAY trước khi launch (nếu không headless)
     if (process.platform === 'linux' && !config.headless) {
         const hasDisplay = await ensureDisplay(log);
-        if (!hasDisplay) {
-            throw new Error(
-                'Không có DISPLAY để chạy Chromium headful.\n' +
-                '  Fix: apt install -y xvfb\n' +
-                '  Script đã cố tự start Xvfb nhưng fail.'
-            );
-        }
+        if (!hasDisplay) throw new Error('Không có DISPLAY để chạy Chromium headful. Chạy: apt install -y xvfb');
     }
 
     const found = findBrowser(config);
-    if (!found) {
-        throw new Error(
-            'Không tìm thấy Chrome/Chromium/Edge.\n' +
-            '  → Kali: apt install -y chromium\n' +
-            '  → Hoặc set BROWSER_PATH trong .env'
-        );
-    }
+    if (!found) throw new Error('Không tìm thấy Chromium/Chrome. Cài đặt: apt install -y chromium');
+
     log(`🌐 Browser: ${found.name} — ${found.path}`);
 
-    // Args cho Chromium — bao gồm flags Xvfb-compatible
     const args = [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -124,8 +82,7 @@ async function launchBrowser(config, proxyInfo, log) {
         defaultViewport: { width: 1280, height: 900 },
         args,
         ignoreDefaultArgs: ['--enable-automation'],
-        protocolTimeout: 180000,
-        dumpio: false
+        protocolTimeout: 180000
     });
     log('✓ Chromium đã mở');
     return browser;
@@ -155,10 +112,7 @@ export async function runBot(config, socket, onDone) {
         // ============================================================
         setStep(1, 'Đổi proxy/VPN');
         const useWarp = config.useWarp || process.env.WARP_ENABLED === 'true';
-        if (useWarp) {
-            // Đảm bảo WARP service sẵn sàng
-            await ensureWarpService(log);
-        }
+        if (useWarp) await ensureWarpService(log);
         proxyInfo = await prepareProxy(log, { warp: useWarp });
 
         // ============================================================
@@ -180,16 +134,11 @@ export async function runBot(config, socket, onDone) {
         await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             window.chrome = { runtime: {} };
-            const origQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (params) =>
-                params.name === 'notifications'
-                    ? Promise.resolve({ state: Notification.permission })
-                    : origQuery(params);
         });
         log('✓ Anti-detect injected');
 
         // ============================================================
-        // INTERCEPTORS
+        // INTERCEPTORS (Bắt Captcha)
         // ============================================================
         const imageBuffers = {};
         let initCaptcha = null;
@@ -211,41 +160,105 @@ export async function runBot(config, socket, onDone) {
                         try {
                             initCaptcha = await res.json();
                             log(`📨 InitCaptcha CertifyId=${initCaptcha.CertifyId}`);
-                        } catch (e) {
-                            log('⚠️ Parse InitCaptcha fail: ' + e.message);
-                        }
+                        } catch (e) {}
                     }
                 }
             } catch {}
         });
 
         // ============================================================
-        // BƯỚC 4: Đăng ký
+        // BƯỚC 4: Đăng ký (Popup Sign-in)
         // ============================================================
-        setStep(4, 'Đăng ký tài khoản');
-        log('🌐 Mở signup...');
-        await page.goto('https://www.vmoscloud.com/signup', {
-            waitUntil: 'domcontentloaded',
-            timeout: 60000
-        });
-        await sleep(4000);
+        setStep(4, 'Đăng ký tài khoản (Popup)');
+        log('🌐 Mở trang chủ VMOS...');
+        await page.goto('https://www.vmoscloud.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await sleep(5000); // Chờ SPA load xong
 
-        log('✍️  Điền email...');
-        await page.waitForSelector(
-            'input[type="email"], input[placeholder*="mail" i], input[placeholder*="Email" i]',
-            { timeout: 20000 }
-        );
-        const emailInput = await page.$('input[type="email"], input[placeholder*="mail" i]');
-        if (!emailInput) throw new Error('Không tìm thấy ô input email');
+        // Tìm và click nút Sign in
+        log('🔎 Tìm nút "Sign in" / "Đăng nhập"...');
+        const signInClicked = await page.evaluate(() => {
+            const patterns = [/^sign\s*in$/i, /^log\s*in$/i, /^login$/i, /^đăng\s*nhập$/i, /sign\s*in/i];
+            const candidates = [...document.querySelectorAll('button, a, [role="button"], [class*="login"]')];
+            
+            for (const el of candidates) {
+                if (el.offsetParent === null) continue;
+                const text = (el.innerText || el.textContent || '').trim();
+                if (patterns.some(p => p.test(text))) {
+                    el.click();
+                    return { clicked: true, text };
+                }
+            }
+            return { clicked: false };
+        });
+
+        if (!signInClicked.clicked) {
+            log('⚠️ Không tìm thấy bằng text. Thử selector fallback...');
+            const fallback = ['.login-btn', '[class*="signin"]', 'header button'];
+            for (const sel of fallback) {
+                const el = await page.$(sel);
+                if (el) { await el.click(); break; }
+            }
+        } else {
+            log(`✓ Đã click: "${signInClicked.text}"`);
+        }
+        await sleep(3000);
+
+        // Chờ popup
+        log('⏳ Chờ popup login...');
+        await page.waitForSelector('.el-dialog, [role="dialog"], .modal', { timeout: 10000 }).catch(() => {});
+        await sleep(2000);
+
+        // Tìm ô email
+        log('🔎 Tìm ô nhập email...');
+        const emailSelectors = [
+            'input[type="email"]',
+            'input[name="email"]',
+            'input[placeholder*="mail" i]',
+            'input[placeholder*="email" i]'
+        ];
+        let emailInput = null;
+        for (const sel of emailSelectors) {
+            const els = await page.$$(sel);
+            for (const el of els) {
+                if (await el.evaluate(n => n.offsetParent !== null)) { emailInput = el; break; }
+            }
+            if (emailInput) { log(`✓ Thấy input: ${sel}`); break; }
+        }
+
+        if (!emailInput) {
+            await page.screenshot({ path: 'debug-step4.png', fullPage: true });
+            throw new Error('Không tìm thấy ô email trong popup. Xem debug-step4.png');
+        }
+
+        // Điền email
+        await emailInput.click({ clickCount: 3 });
         await emailInput.type(mail.address, { delay: 40 });
         await sleep(500);
+        log(`✓ Đã điền email: ${mail.address}`);
 
-        log('🖱️ Click đăng ký...');
-        await page.evaluate(() => {
-            const btns = [...document.querySelectorAll('button')];
-            const btn = btns.find(b => /đăng ký|sign up|get code|tiếp tục|continue|register/i.test(b.innerText));
-            btn?.click();
+        // Click nút tiếp tục / gửi mã
+        log('🖱️ Click nút tiếp tục (Get code / Continue)...');
+        const submitClicked = await page.evaluate(() => {
+            const patterns = [/get\s*code/i, /continue/i, /next/i, /gửi\s*mã/i, /tiếp\s*tục/i, /đăng\s*ký/i];
+            const containers = document.querySelectorAll('[role="dialog"], .el-dialog, .modal');
+            let allBtns = [];
+            for (const c of containers) allBtns.push(...c.querySelectorAll('button'));
+            if (allBtns.length === 0) allBtns = [...document.querySelectorAll('button')];
+
+            for (const btn of allBtns) {
+                if (btn.offsetParent === null) continue;
+                const text = (btn.innerText || '').trim();
+                if (patterns.some(p => p.test(text))) { btn.click(); return true; }
+            }
+            return false;
         });
+
+        if (!submitClicked) {
+            log('⚠️ Không thấy nút, thử nhấn Enter...');
+            await emailInput.press('Enter');
+        } else {
+            log('✓ Đã click nút gửi mã');
+        }
 
         // ============================================================
         // BƯỚC 5: Giải Captcha
@@ -259,19 +272,12 @@ export async function runBot(config, socket, onDone) {
         }
 
         if (!initCaptcha || !imageBuffers.back || !imageBuffers.shadow) {
-            throw new Error(
-                'Không bắt được captcha data:\n' +
-                `  InitCaptcha: ${!!initCaptcha}\n` +
-                `  back.png:    ${!!imageBuffers.back}\n` +
-                `  shadow.png:  ${!!imageBuffers.shadow}`
-            );
+            await page.screenshot({ path: 'debug-step5.png', fullPage: true });
+            throw new Error('Không bắt được captcha data. Xem debug-step5.png');
         }
         log('✓ Đã có captcha data');
 
-        const capResult = await solveAliyunPuzzle(page, imageBuffers, log, {
-            maxAttempts: 3,
-            saveDebug: false
-        });
+        const capResult = await solveAliyunPuzzle(page, imageBuffers, log, { maxAttempts: 3 });
         if (!capResult.success) throw new Error('Captcha fail sau 3 lần');
         log('✅ Captcha passed!');
         await sleep(2000);
@@ -289,10 +295,6 @@ export async function runBot(config, socket, onDone) {
         log('⌨️  Điền OTP...');
         await page.waitForSelector('input[type="number"][maxlength="1"]', { timeout: 15000 });
         const otpInputs = await page.$$('input[type="number"][maxlength="1"]');
-        if (otpInputs.length < 6) {
-            throw new Error(`Chỉ có ${otpInputs.length} ô OTP, cần 6`);
-        }
-
         for (let i = 0; i < 6; i++) {
             await otpInputs[i].type(signupOTP[i], { delay: 80 });
             await sleep(100);
@@ -300,9 +302,7 @@ export async function runBot(config, socket, onDone) {
 
         log('🖱️ Xác nhận OTP...');
         await page.evaluate(() => {
-            const btn = [...document.querySelectorAll('button')].find(b =>
-                /xác nhận|xác minh|confirm|verify|tiếp tục|hoàn tất/i.test(b.innerText)
-            );
+            const btn = [...document.querySelectorAll('button')].find(b => /xác nhận|xác minh|confirm|verify|hoàn tất/i.test(b.innerText));
             btn?.click();
         });
         await sleep(8000);
@@ -319,31 +319,23 @@ export async function runBot(config, socket, onDone) {
         await sleep(3000);
 
         log('🖱️ Click "Thay đổi mật khẩu"...');
-        const linkClicked = await page.evaluate(() => {
-            const link = [...document.querySelectorAll('.el-link--primary')]
-                .find(a => /thay đổi mật khẩu/i.test(a.innerText));
-            if (!link) return false;
-            link.click();
-            return true;
+        await page.evaluate(() => {
+            const link = [...document.querySelectorAll('.el-link--primary')].find(a => /thay đổi mật khẩu/i.test(a.innerText));
+            link?.click();
         });
-        if (!linkClicked) throw new Error('Không tìm thấy link "Thay đổi mật khẩu"');
         await sleep(2000);
 
         log('📨 Click "Nhận mã xác minh"...');
         const resetOTPTimeStart = Date.now();
-        const verifyClicked = await page.evaluate(() => {
-            const el = document.querySelector('.get-verify-code');
-            if (!el) return false;
-            el.click();
-            return true;
+        await page.evaluate(() => {
+            document.querySelector('.get-verify-code')?.click();
         });
-        if (!verifyClicked) throw new Error('Không tìm thấy nút "Nhận mã xác minh"');
         await sleep(2000);
 
         log('⏳ Chờ OTP đổi password...');
         const resetOTP = await pollOTP(mail.token, log, {
             timeout: 180000,
-            skipCount: 1,
+            skipCount: 1, // Bỏ qua OTP signup
             since: resetOTPTimeStart
         });
 
@@ -353,19 +345,13 @@ export async function runBot(config, socket, onDone) {
         await page.type('input[placeholder="Vui lòng nhập mật khẩu mới"]', newPassword, { delay: 60 });
         await sleep(500);
 
-        log('🖱️ Xác nhận đổi password...');
+        log('🖱️ Xác nhận...');
         await page.evaluate(() => {
-            const btn = [...document.querySelectorAll('.el-dialog__footer .el-button--primary')]
-                .find(b => /chắc chắn|confirm/i.test(b.innerText));
+            const btn = [...document.querySelectorAll('.el-dialog__footer .el-button--primary')].find(b => /chắc chắn|confirm/i.test(b.innerText));
             btn?.click();
         });
         await sleep(4000);
-
-        const passChanged = await page.evaluate(() => {
-            const dlg = document.querySelector('.el-dialog__wrapper:not([style*="display: none"])');
-            return !dlg || dlg.offsetParent === null;
-        });
-        log(passChanged ? '✅ Đổi password OK: ' + newPassword : '⚠️ Có thể chưa đổi được password (modal vẫn mở)');
+        log('✅ Đã xử lý đổi password');
 
         // ============================================================
         // BƯỚC 9: Claim trial
@@ -381,12 +367,8 @@ export async function runBot(config, socket, onDone) {
             btn.click();
             return true;
         });
-        if (claimed) {
-            log('✓ Clicked trial button');
-            await sleep(5000);
-        } else {
-            log('⚠️ Không thấy nút trial (có thể đã claim hoặc UI đổi)');
-        }
+        if (claimed) { log('✓ Clicked trial'); await sleep(5000); }
+        else { log('⚠️ Không thấy nút trial (có thể đã claim)'); }
 
         // ============================================================
         // BƯỚC 10: Logout
@@ -395,18 +377,12 @@ export async function runBot(config, socket, onDone) {
         await page.goto('https://www.vmoscloud.com/settings', { waitUntil: 'domcontentloaded' });
         await sleep(2500);
 
-        const logoutClicked = await page.evaluate(() => {
-            const btn = document.querySelector('button.el-button--danger.is-plain');
-            if (!btn) return false;
-            btn.click();
-            return true;
-        });
-        log(logoutClicked ? '🚪 Đã click logout' : '⚠️ Không tìm thấy nút logout');
-        await sleep(3000);
-
         await page.evaluate(() => {
-            try { localStorage.clear(); sessionStorage.clear(); } catch {}
-        }).catch(() => {});
+            document.querySelector('button.el-button--danger.is-plain')?.click();
+        });
+        await sleep(3000);
+        await page.evaluate(() => { try { localStorage.clear(); } catch {} }).catch(() => {});
+        log('🚪 Đã logout');
 
         // ============================================================
         // RESULT
@@ -415,18 +391,12 @@ export async function runBot(config, socket, onDone) {
             email: mail.address,
             password: newPassword,
             mailPassword: mail.password,
-            mailToken: mail.token,
-            proxyMethod: proxyInfo.method,
-            proxyIp: proxyInfo.ip || null,
             timestamp: new Date().toISOString()
         };
 
         log('');
         log('════════════════════════════════════════════');
         log('✅ HOÀN TẤT');
-        log(`📧 VMOS: ${result.email}`);
-        log(`🔑 Pass: ${result.password}`);
-        log(`📮 Mail: ${result.mailPassword}`);
         log(`📋 Format: ${result.email}|${result.password}|${result.mailPassword}`);
         log('════════════════════════════════════════════');
 
@@ -434,18 +404,14 @@ export async function runBot(config, socket, onDone) {
 
     } catch (e) {
         log('❌ LỖI: ' + e.message);
-        console.error(e.stack);
-
-        // Screenshot debug
         try {
             const pages = await browser?.pages();
             if (pages?.[0]) {
                 const p = `error-${Date.now()}.png`;
                 await pages[0].screenshot({ path: p, fullPage: true });
-                log(`📸 Screenshot: ${p}`);
+                log(`📸 Đã lưu ảnh lỗi: ${p}`);
             }
         } catch {}
-
         socket.emit('error', e.message);
     } finally {
         try { if (browser) await browser.close(); } catch {}

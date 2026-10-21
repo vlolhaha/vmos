@@ -6,49 +6,66 @@
 <title>VMOS Auto Tool</title>
 <style>
     * { box-sizing: border-box; }
-    body { font-family: ui-monospace, monospace; background: #11111b; color: #cdd6f4; padding: 20px; max-width: 900px; margin: auto; }
-    h1 { color: #89b4fa; font-size: 22px; }
-    .card { background: #1e1e2e; border: 1px solid #45475a; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
-    label { display: block; font-size: 12px; color: #a6adc8; margin: 10px 0 5px; }
-    input[type="text"], select { width: 100%; padding: 8px 12px; background: #313244; border: 1px solid #45475a; color: #cdd6f4; border-radius: 6px; font-family: inherit; font-size: 13px; }
-    input[type="checkbox"] { margin-right: 6px; }
-    button { padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-family: inherit; font-size: 14px; }
-    button.primary { background: #a6e3a1; color: #11111b; width: 100%; }
-    button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
-    #logs { height: 400px; overflow-y: auto; background: #181825; padding: 12px; border-radius: 6px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
-    #logs div { padding: 1px 0; }
-    #result { font-size: 15px; color: #a6e3a1; font-weight: bold; padding: 12px; background: #181825; border-radius: 6px; word-break: break-all; display: none; }
+    body { font-family: ui-monospace, 'Cascadia Code', monospace; background: #11111b; color: #cdd6f4; padding: 20px; max-width: 900px; margin: auto; }
+    h1 { color: #89b4fa; font-size: 22px; display: flex; align-items: center; gap: 10px; }
+    .card { background: #1e1e2e; border: 1px solid #45475a; border-radius: 10px; padding: 16px; margin-bottom: 14px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    label { display: block; font-size: 12px; color: #a6adc8; margin: 10px 0 5px; font-weight: bold; }
+    input[type="text"], select { width: 100%; padding: 10px 12px; background: #313244; border: 1px solid #45475a; color: #cdd6f4; border-radius: 6px; font-family: inherit; font-size: 13px; }
+    input[type="checkbox"] { margin-right: 8px; transform: scale(1.2); cursor: pointer; }
+    .checkbox-group { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
+    .checkbox-group label { display: flex; align-items: center; margin: 0; font-weight: normal; cursor: pointer; }
+    button.primary { background: #a6e3a1; color: #11111b; padding: 14px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-family: inherit; font-size: 15px; width: 100%; margin-top: 15px; transition: 0.2s; }
+    button.primary:hover { background: #94e2d5; transform: translateY(-1px); }
+    button.primary:disabled { background: #45475a; color: #6c7086; cursor: not-allowed; transform: none; }
+    #logs { height: 400px; overflow-y: auto; background: #181825; padding: 12px; border-radius: 6px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; border: 1px solid #313244; }
+    #logs div { padding: 2px 0; border-bottom: 1px solid #1e1e2e; }
+    #result { font-size: 15px; color: #a6e3a1; font-weight: bold; padding: 16px; background: #181825; border-radius: 6px; word-break: break-all; display: none; border: 1px solid #a6e3a1; }
     .err { color: #f38ba8; }
     .ok { color: #a6e3a1; }
     .warn { color: #f9e2af; }
-    .step { color: #89b4fa; font-weight: bold; }
+    .step { color: #89b4fa; font-weight: bold; margin-top: 8px; }
+    .header-line { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+    .status-dot.wait { background: #f9e2af; }
+    .status-dot.run { background: #89b4fa; animation: pulse 1.5s infinite; }
+    .status-dot.done { background: #a6e3a1; }
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
 </style>
 <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
-<h1>🌐 VMOS Auto Tool (Chromium)</h1>
+<h1>🌐 VMOS Auto Tool</h1>
 
 <div class="card">
-    <label>Browser</label>
+    <div class="header-line">
+        <label style="margin:0;">Cấu hình</label>
+        <div><span class="status-dot wait" id="statusDot"></span><span id="statusText" style="font-size:12px;color:#a6adc8;">Chờ lệnh</span></div>
+    </div>
+    
+    <label>Browser Engine</label>
     <select id="browser">
-        <option value="auto">Auto (Chrome ưu tiên)</option>
-        <option value="chrome">Chrome</option>
-        <option value="edge">Edge</option>
+        <option value="auto">Auto Detect (Chromium ưu tiên)</option>
+        <option value="chromium">Chromium (Kali Linux)</option>
+        <option value="chrome">Google Chrome</option>
     </select>
 
-    <label>Browser Path (để trống → auto-detect)</label>
-    <input type="text" id="browserPath" placeholder="C:\Program Files\Google\Chrome\Application\chrome.exe">
+    <label>Browser Path (để trống → tự tìm)</label>
+    <input type="text" id="browserPath" placeholder="/usr/bin/chromium">
 
-    <label><input type="checkbox" id="headless"> Headless (⚠️ dễ bị Cloudflare chặn)</label>
-    <label><input type="checkbox" id="useWarp"> Rotate IP qua WARP</label>
+    <div class="checkbox-group">
+        <label><input type="checkbox" id="headless"> Chạy Headless (⚠️ Dễ bị Cloudflare chặn)</label>
+        <label><input type="checkbox" id="useWarp"> Rotate IP qua WARP (Yêu cầu warp-cli)</label>
+    </div>
 
-    <br>
-    <button class="primary" id="startBtn">🚀 Tạo Account</button>
+    <button class="primary" id="startBtn">🚀 Bắt đầu tạo Account</button>
 </div>
 
 <div class="card">
-    <label>Tiến trình:</label>
-    <div id="logs"></div>
+    <div class="header-line">
+        <label style="margin:0;">Tiến trình Bot</label>
+        <button id="clearLogs" style="background:none;border:none;color:#6c7086;cursor:pointer;font-size:12px;">Xoá Log</button>
+    </div>
+    <div id="logs">Sẵn sàng...</div>
 </div>
 
 <div class="card">
