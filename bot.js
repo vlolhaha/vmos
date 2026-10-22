@@ -58,7 +58,6 @@ async function launchBrowser(config, proxyInfo, log) {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
-        '--disable-features=IsolateOrigins,site-per-process,UserAgentClientHint',
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--disable-software-rasterizer',
@@ -66,8 +65,7 @@ async function launchBrowser(config, proxyInfo, log) {
         '--no-default-browser-check',
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        '--disable-renderer-backgrounding'
     ];
 
     if (proxyInfo.proxy) {
@@ -89,6 +87,135 @@ async function launchBrowser(config, proxyInfo, log) {
 }
 
 // ============================================================
+// ĐĂNG NHẬP LẠI BẰNG PASSWORD (sau khi đổi password → site logout)
+// ============================================================
+async function loginWithPassword(page, account, password, log) {
+    log('🔐 Đăng nhập lại bằng mật khẩu...');
+
+    // VMOS trả checkEmail data:true cho tài khoản vừa tạo (dù đã có password)
+    // → UI nhảy sang form đăng ký. Chặn response này để ép hiện panel password.
+    const onRequest = (req) => {
+        try {
+            if (/\/user\/checkEmail/i.test(req.url())) {
+                const cors = {
+                    'access-control-allow-origin': 'https://cloud.vmoscloud.com',
+                    'access-control-allow-credentials': 'true',
+                    'access-control-allow-methods': 'GET,POST,OPTIONS',
+                    'access-control-allow-headers': req.headers()['access-control-request-headers'] || '*'
+                };
+                if (req.method() === 'OPTIONS') {
+                    req.respond({ status: 204, headers: cors });
+                } else {
+                    req.respond({
+                        status: 200,
+                        headers: { ...cors, 'content-type': 'application/json; charset=utf-8' },
+                        body: JSON.stringify({ code: 200, msg: 'success', data: false, '2fa': false })
+                    });
+                }
+            } else {
+                req.continue();
+            }
+        } catch {
+            try { req.continue(); } catch {}
+        }
+    };
+    await page.setRequestInterception(true);
+    page.on('request', onRequest);
+
+    try {
+        await page.waitForSelector('#login-dialog', { timeout: 15000 });
+        await page.waitForFunction(() => {
+            const d = document.querySelector('#login-dialog');
+            return d && d.offsetParent !== null;
+        }, { timeout: 15000 });
+        await sleep(1000);
+
+        // Panel email / user ID
+        const accountInput = await page.$(
+            '#login-dialog input[placeholder*="email" i], #login-dialog input[placeholder*="user" i]'
+        ) || await page.$('#login-dialog input.el-input__inner');
+        if (!accountInput) throw new Error('Không thấy ô email/user ID trong login dialog');
+        await accountInput.click({ clickCount: 3 });
+        await accountInput.type(account, { delay: 40 });
+        await sleep(600);
+
+        // TOS mặc định đã check; chỉ click nếu icon "checked" đang ẩn
+        const tosVisible = await page.evaluate(() => {
+            const imgs = [...document.querySelectorAll('#login-dialog .tos img')];
+            return imgs.map(i => i.style.display !== 'none');
+        });
+        if (tosVisible.length && tosVisible[tosVisible.length - 1] !== true) {
+            log('☑️ Check TOS...');
+            await page.evaluate(() => document.querySelector('#login-dialog .tos img')?.click());
+            await sleep(500);
+        }
+
+        const firstName = await page.evaluate(() => {
+            const dlg = document.querySelector('#login-dialog');
+            const btn = [...dlg.querySelectorAll('button')].find(b =>
+                b.offsetParent !== null &&
+                b.classList.contains('el-button--primary') &&
+                b.classList.contains('el-button--large'));
+            btn?.click();
+            return btn?.innerText?.trim() || null;
+        });
+        log(`✓ Click "${firstName || 'Login/Register'}"`);
+        await sleep(1800);
+
+        try {
+            await page.waitForSelector('#login-dialog input[type="password"]', { timeout: 15000 });
+        } catch {
+            const text = await page.evaluate(() =>
+                document.querySelector('#login-dialog')?.innerText?.slice(0, 800) || '');
+            throw new Error('Không hiện panel password: ' + text);
+        }
+
+        const pwdInput = await page.$('#login-dialog input[type="password"]');
+        await pwdInput.click({ clickCount: 3 });
+        await pwdInput.type(password, { delay: 50 });
+        await sleep(600);
+
+        const loginClicked = await page.evaluate(() => {
+            const dlg = document.querySelector('#login-dialog');
+            const btns = [...dlg.querySelectorAll('button')].filter(b => b.offsetParent !== null);
+            const btn = btns.find(b =>
+                b.classList.contains('el-button--primary') &&
+                b.classList.contains('el-button--large')) ||
+                btns.find(b => /^(login|sign in)$/i.test((b.innerText || '').trim()));
+            btn?.click();
+            return btn?.innerText?.trim() || null;
+        });
+        log(`✓ Click Login: ${loginClicked || '(none)'}`);
+
+        try {
+            await page.waitForFunction(() => {
+                const d = document.querySelector('#login-dialog');
+                return !d || d.offsetParent === null;
+            }, { timeout: 20000 });
+        } catch {}
+        await sleep(3000);
+
+        const state = await page.evaluate(() => {
+            const d = document.querySelector('#login-dialog');
+            return {
+                url: location.href,
+                loginVisible: !!(d && d.offsetParent !== null),
+                toast: [...document.querySelectorAll('.el-message, .el-notification')]
+                    .map(e => (e.innerText || '').trim()).filter(Boolean).join(' | ')
+            };
+        });
+        log('📍 Sau login: ' + JSON.stringify(state));
+        if (state.loginVisible) {
+            throw new Error('Đăng nhập lại thất bại' + (state.toast ? ': ' + state.toast : ''));
+        }
+        log('✅ Đăng nhập lại thành công');
+    } finally {
+        page.off('request', onRequest);
+        try { await page.setRequestInterception(false); } catch {}
+    }
+}
+
+// ============================================================
 // MAIN BOT — 10 BƯỚC
 // ============================================================
 export async function runBot(config, socket, onDone) {
@@ -101,6 +228,7 @@ export async function runBot(config, socket, onDone) {
         socket.emit('step', { n, name });
         log(`\n━━━ BƯỚC ${n}/10: ${name} ━━━`);
     };
+    const debug = !!(config.debug || process.env.VMOS_DEBUG === '1');
 
     let browser = null;
     let proxyInfo = { method: 'none' };
@@ -142,16 +270,31 @@ export async function runBot(config, socket, onDone) {
         // ============================================================
         const imageBuffers = {};
         let initCaptcha = null;
+        let passwordChangeOk = null;
+        let claimTrialResult = null;
+
+        page.on('request', (req) => {
+            try {
+                if (!debug) return;
+                const u = req.url();
+                if (req.method() === 'POST' && /api\.vmoscloud\.com|login|sms|user|verify/i.test(u)) {
+                    const shortUrl = u.replace('https://api.vmoscloud.com/vcpcloud/api/', '');
+                    log(`📡 REQ ${shortUrl}: ${(req.postData() || '').slice(0, 220)}`);
+                }
+            } catch {}
+        });
 
         page.on('response', async (res) => {
             const url = res.url();
             try {
                 if (/\/back\.png/.test(url)) {
                     imageBuffers.back = await res.buffer();
-                    log(`📥 back.png (${imageBuffers.back.length}B)`);
+                    imageBuffers.backAt = Date.now();
+                    if (debug) log(`📥 back.png (${imageBuffers.back.length}B)`);
                 } else if (/\/shadow\.png/.test(url)) {
                     imageBuffers.shadow = await res.buffer();
-                    log(`📥 shadow.png (${imageBuffers.shadow.length}B)`);
+                    imageBuffers.shadowAt = Date.now();
+                    if (debug) log(`📥 shadow.png (${imageBuffers.shadow.length}B)`);
                 }
 
                 if (/captcha.*aliyuncs\.com/.test(url) && res.request().method() === 'POST') {
@@ -159,9 +302,32 @@ export async function runBot(config, socket, onDone) {
                     if (pd.includes('Action=InitCaptcha')) {
                         try {
                             initCaptcha = await res.json();
-                            log(`📨 InitCaptcha CertifyId=${initCaptcha.CertifyId}`);
+                            if (debug) log(`📨 InitCaptcha CertifyId=${initCaptcha.CertifyId}`);
                         } catch (e) {}
                     }
+                }
+
+                if (/\/sms\/smsSend/.test(url)) {
+                    try {
+                        const body = await res.text();
+                        log(`📤 smsSend: ${body.slice(0, 300)}`);
+                    } catch {}
+                }
+
+                if (/\/vcpcloud\/api\//.test(url) && !/\/sms\/smsSend/.test(url) && !/\.png/i.test(url)) {
+                    try {
+                        const body = await res.text();
+                        if (debug) {
+                            const shortUrl = url.replace('https://api.vmoscloud.com/vcpcloud/api/', '');
+                            log(`📡 ${res.status()} ${shortUrl}: ${body.slice(0, 500)}`);
+                        }
+                        if (/\/user\/updateUserPassword/.test(url)) {
+                            try { passwordChangeOk = JSON.parse(body)?.code === 200; } catch {}
+                        }
+                        if (/\/newUserBenefits\/claimTrial/.test(url)) {
+                            try { claimTrialResult = JSON.parse(body); } catch {}
+                        }
+                    } catch {}
                 }
             } catch {}
         });
@@ -295,7 +461,7 @@ export async function runBot(config, socket, onDone) {
         }
         log('✓ Đã có captcha data');
 
-        const capResult = await solveAliyunPuzzle(page, imageBuffers, log, { maxAttempts: 3 });
+        const capResult = await solveAliyunPuzzle(page, imageBuffers, log, { maxAttempts: 3, powDelay: 6000 });
         if (!capResult.success) throw new Error('Captcha fail sau 3 lần');
         log('✅ Captcha passed!');
         await sleep(2000);
@@ -310,20 +476,74 @@ export async function runBot(config, socket, onDone) {
         // BƯỚC 7: Điền OTP
         // ============================================================
         setStep(7, 'Điền OTP đăng ký');
-        log('⌨️  Điền OTP...');
         await page.waitForSelector('input[type="number"][maxlength="1"]', { timeout: 15000 });
+
+        // Form đăng ký mới yêu cầu Customer ID (dùng làm ID đăng nhập).
+        // Dùng local-part của email làm ID: 6-32 ký tự, chỉ chữ/số.
+        const customerId = mail.address.split('@')[0];
+        const customerInput = await page.$('#registration-customer-id');
+        if (customerInput) {
+            await customerInput.click({ clickCount: 3 });
+            await customerInput.type(customerId, { delay: 40 });
+            await sleep(400);
+            log(`✓ Customer ID: ${customerId}`);
+        } else {
+            log('⚠️ Không thấy #registration-customer-id');
+        }
+
+        log('⌨️  Điền OTP...');
         const otpInputs = await page.$$('input[type="number"][maxlength="1"]');
         for (let i = 0; i < 6; i++) {
             await otpInputs[i].type(signupOTP[i], { delay: 80 });
-            await sleep(100);
+            await sleep(180);
+        }
+        // Auto-submit khi đủ 6 số; chờ component kịp gửi request
+        await sleep(1200);
+
+        // onComplete sẽ tự submit; click nút Register dự phòng nếu vẫn còn
+        const registerBtn = await page.$('.register-submit');
+        if (registerBtn) {
+            const disabled = await registerBtn.evaluate(el =>
+                el.disabled || el.classList.contains('is-disabled')
+            );
+            if (!disabled) {
+                log('🖱️ Click Register...');
+                await registerBtn.click();
+            } else {
+                log('⚠️ Register button vẫn disabled');
+            }
         }
 
-        log('🖱️ Xác nhận OTP...');
-        await page.evaluate(() => {
-            const btn = [...document.querySelectorAll('button')].find(b => /xác nhận|xác minh|confirm|verify|tiếp tục|hoàn tất/i.test(b.innerText));
-            btn?.click();
+        log('⏳ Chờ xác minh OTP...');
+        try {
+            await page.waitForFunction(() => {
+                const otp = document.querySelector('input[type="number"][maxlength="1"]');
+                const dlg = document.querySelector('#login-dialog');
+                const loginVisible = !!(dlg && dlg.offsetParent !== null);
+                return /new-user-benefits/i.test(location.pathname) ||
+                    (!otp && !loginVisible);
+            }, { timeout: 20000 });
+        } catch {}
+        await sleep(2500);
+
+        const postOtp = await page.evaluate(() => {
+            const dlg = document.querySelector('#login-dialog');
+            const text = document.body.innerText || '';
+            return {
+                url: location.href,
+                loginVisible: !!(dlg && dlg.offsetParent !== null),
+                authenticated: /Personal account|个人账号|Tài khoản cá nhân/i.test(text),
+                toast: [...document.querySelectorAll('.el-message, .el-notification')]
+                    .map(e => (e.innerText || '').trim()).filter(Boolean).join(' | ')
+            };
         });
-        await sleep(8000);
+        log('📍 URL sau OTP: ' + postOtp.url);
+        if (postOtp.toast) log('🧾 Toast OTP: ' + postOtp.toast);
+        if (postOtp.loginVisible ||
+            (!postOtp.authenticated && !/new-user-benefits/i.test(postOtp.url))) {
+            throw new Error('Đăng ký/OTP thất bại (login dialog=' + postOtp.loginVisible + ')' +
+                (postOtp.toast ? ': ' + postOtp.toast : ''));
+        }
         log('✓ Đã vào dashboard');
 
         // ============================================================
@@ -333,78 +553,227 @@ export async function runBot(config, socket, onDone) {
         const newPassword = 'Vmos@' + Math.random().toString(36).slice(2, 10) + 'A1';
         log('🔐 Password mới: ' + newPassword);
 
-        await page.goto('https://cloud.vmoscloud.com/settings', { waitUntil: 'domcontentloaded' });
-        await sleep(3000);
+        await page.goto('https://cloud.vmoscloud.com/setting', { waitUntil: 'domcontentloaded' });
+        await sleep(4000);
 
-        log('🖱️ Click "Thay đổi mật khẩu"...');
-        await page.evaluate(() => {
-            const link = [...document.querySelectorAll('.el-link--primary')].find(a => /thay đổi mật khẩu/i.test(a.innerText));
-            link?.click();
+        log('🖱️ Click "Change Password"...');
+        const clickedChange = await page.evaluate(() => {
+            const visible = el => el && el.offsetParent !== null;
+            const candidates = [...document.querySelectorAll('a, button, span, div')]
+                .filter(el => visible(el) && /change password/i.test(el.textContent || '') && (el.textContent || '').trim().length < 40);
+            if (!candidates.length) return false;
+            candidates[candidates.length - 1].click();
+            return true;
         });
-        await sleep(2000);
+        if (!clickedChange) {
+            await page.screenshot({ path: 'debug-step8-setting.png', fullPage: true });
+            throw new Error('Không tìm thấy "Change Password". Xem debug-step8-setting.png');
+        }
 
-        log('📨 Click "Nhận mã xác minh"...');
+        // Chờ dialog đổi mật khẩu
+        await page.waitForSelector('.el-dialog', { timeout: 10000 });
+        await sleep(1200);
+        const dialogState = await page.evaluate(() => {
+            const d = document.querySelector('.el-dialog');
+            if (!d) return null;
+            return {
+                text: d.innerText.replace(/\s+/g, ' ').slice(0, 600),
+                inputs: [...d.querySelectorAll('input')].map(i => ({
+                    type: i.type, placeholder: i.placeholder, value: i.value, disabled: i.disabled
+                }))
+            };
+        });
+        log('🧾 Dialog state: ' + JSON.stringify(dialogState));
+
+        log('📨 Click "Get code"...');
         const resetOTPTimeStart = Date.now();
-        await page.evaluate(() => {
-            document.querySelector('.get-verify-code')?.click();
+        const clickedCode = await page.evaluate(() => {
+            const el = document.querySelector('.el-dialog .get-verify-code') ||
+                document.querySelector('.get-verify-code');
+            if (!el) return false;
+            el.click();
+            return true;
         });
-        await sleep(2000);
+        if (!clickedCode) throw new Error('Không tìm thấy nút "Get code"');
+        await sleep(2500);
+        const toast = await page.evaluate(() =>
+            [...document.querySelectorAll('.el-message, .el-notification, .el-message-box')]
+                .map(e => (e.innerText || '').trim()).filter(Boolean).join(' | ')
+        );
+        log('🧾 Toast sau Get code: ' + (toast || '(none)'));
 
         log('⏳ Chờ OTP đổi password...');
         const resetOTP = await mail.pollOTP({
             timeout: 180000,
-            skipCount: 1,
+            skipCount: 0,
             since: resetOTPTimeStart
         });
 
-        log('⌨️  Điền OTP + pass mới...');
-        await page.waitForSelector('input[placeholder="Vui lòng nhập mã xác minh"]', { timeout: 10000 });
-        await page.type('input[placeholder="Vui lòng nhập mã xác minh"]', resetOTP, { delay: 60 });
-        await page.type('input[placeholder="Vui lòng nhập mật khẩu mới"]', newPassword, { delay: 60 });
+        log('⌨️  Điền OTP + password mới...');
+        const pwdDialog = await page.$('.el-dialog');
+        const codeInput = await pwdDialog.$('input[placeholder*="verification" i], input[placeholder*="mã xác minh" i]');
+        const pwInput = await pwdDialog.$('input[type="password"]');
+        if (!codeInput || !pwInput) {
+            const html = await pwdDialog.evaluate(el => el.outerHTML.slice(0, 3000));
+            throw new Error('Không tìm thấy input OTP/password trong dialog: ' + html);
+        }
+        await codeInput.click({ clickCount: 3 });
+        await codeInput.type(resetOTP, { delay: 60 });
+        await pwInput.click({ clickCount: 3 });
+        await pwInput.type(newPassword, { delay: 60 });
         await sleep(500);
 
-        log('🖱️ Xác nhận...');
-        await page.evaluate(() => {
-            const btn = [...document.querySelectorAll('.el-dialog__footer .el-button--primary')].find(b => /chắc chắn|confirm/i.test(b.innerText));
-            btn?.click();
-        });
-        await sleep(4000);
-        log('✅ Đã xử lý đổi password');
+        log('🖱️ Xác nhận đổi password...');
+        const okBtn = await pwdDialog.$('.el-dialog__footer .el-button--primary');
+        if (!okBtn) throw new Error('Không tìm thấy nút OK');
+        passwordChangeOk = null;
+        await okBtn.click();
+
+        // Chờ API updateUserPassword trả 200
+        let pwdOk = null;
+        for (let i = 0; i < 60; i++) {
+            if (passwordChangeOk !== null) { pwdOk = passwordChangeOk; break; }
+            await sleep(500);
+        }
+        if (pwdOk !== true) {
+            await page.screenshot({ path: 'debug-step8-pwdfail.png', fullPage: true });
+            const dlgText = await page.evaluate(() =>
+                document.querySelector('.el-dialog')?.innerText?.slice(0, 600) || '');
+            throw new Error('Đổi password thất bại (API không trả 200): ' + dlgText);
+        }
+        log('✅ API đổi password OK');
+        await sleep(2500);
+
+        // Site gọi logout() sau khi đổi password → login lại bằng password mới
+        let loginVisible = false;
+        for (let i = 0; i < 10; i++) {
+            loginVisible = await page.evaluate(() => {
+                const d = document.querySelector('#login-dialog');
+                return !!(d && d.offsetParent !== null);
+            });
+            if (loginVisible) break;
+            await sleep(500);
+        }
+        if (loginVisible) {
+            log('🔐 Session đã bị logout sau đổi password');
+            await loginWithPassword(page, mail.address, newPassword, log);
+        } else {
+            log('⚠️ Không thấy login dialog sau đổi password');
+        }
+        await sleep(1500);
+        log('✅ Đã đổi password');
 
         // ============================================================
         // BƯỚC 9: Claim trial
         // ============================================================
         setStep(9, 'Claim trial cloud phone');
-        await page.goto('https://cloud.vmoscloud.com/', { waitUntil: 'domcontentloaded' });
-        await sleep(4000);
+        log('🌐 Mở trang New User Benefits...');
+        await page.goto('https://cloud.vmoscloud.com/new-user-benefits', { waitUntil: 'domcontentloaded' });
+        await sleep(5000);
 
-        log('🖱️ Click "Try a cloud phone"...');
-        const claimed = await page.evaluate(() => {
-            const btn = document.querySelector('.nb-benefit-trial button.nb-primary');
-            if (!btn) return false;
-            btn.click();
-            return true;
+        // Chờ nút trial render + enabled
+        try {
+            await page.waitForFunction(() => {
+                const btn = document.querySelector('.nb-benefit-trial button');
+                if (!btn) return false;
+                const text = (btn.innerText || '').trim();
+                return /claim now|去领取|view now|去查看|claimed|已领取/i.test(text);
+            }, { timeout: 20000 });
+        } catch {}
+
+        const trialState = await page.evaluate(() => {
+            const btn = document.querySelector('.nb-benefit-trial button');
+            return btn ? {
+                text: (btn.innerText || '').trim(),
+                disabled: btn.disabled,
+                className: btn.className
+            } : null;
         });
-        if (claimed) {
-            log('✓ Clicked trial');
-            await sleep(5000);
+        log('🎁 Trial button: ' + JSON.stringify(trialState));
+
+        if (!trialState) {
+            await page.screenshot({ path: 'debug-step9-notrial.png', fullPage: true });
+            throw new Error('Không thấy nút trial. Xem debug-step9-notrial.png');
+        }
+
+        if (/view now|去查看|claimed|已领取/i.test(trialState.text)) {
+            log('✓ Trial đã được claim trước đó');
+        } else if (trialState.disabled) {
+            await page.screenshot({ path: 'debug-step9-disabled.png', fullPage: true });
+            throw new Error('Nút trial bị disabled: ' + JSON.stringify(trialState));
         } else {
-            log('⚠️ Không thấy nút trial (có thể đã claim)');
+            claimTrialResult = null;
+            await page.evaluate(() => {
+                document.querySelector('.nb-benefit-trial button')?.click();
+            });
+            log('🖱️ Đã click Claim now, chờ API claimTrial...');
+            let claimRes = null;
+            for (let i = 0; i < 60; i++) {
+                if (claimTrialResult !== null) { claimRes = claimTrialResult; break; }
+                await sleep(500);
+            }
+            if (!claimRes || claimRes.code !== 200) {
+                await page.screenshot({ path: 'debug-step9-claimfail.png', fullPage: true });
+                throw new Error('Claim trial thất bại: ' + JSON.stringify(claimRes));
+            }
+            log('✅ Claim trial OK: ' + JSON.stringify(claimRes.data || claimRes).slice(0, 500));
+            await sleep(3000);
+            const after = await page.evaluate(() => ({
+                successVisible: !!document.querySelector('.nb-success-dialog'),
+                dialogText: (document.querySelector('.nb-success-dialog')?.innerText || '').slice(0, 300),
+                buttonText: (document.querySelector('.nb-benefit-trial button')?.innerText || '').trim()
+            }));
+            log('🧾 Sau claim: ' + JSON.stringify(after));
         }
 
         // ============================================================
         // BƯỚC 10: Logout
         // ============================================================
         setStep(10, 'Logout + cleanup');
-        await page.goto('https://cloud.vmoscloud.com/settings', { waitUntil: 'domcontentloaded' });
-        await sleep(2500);
+        await page.goto('https://cloud.vmoscloud.com/setting', { waitUntil: 'domcontentloaded' });
+        await sleep(3000);
+
+        try {
+            await page.waitForFunction(() => {
+                return [...document.querySelectorAll('button')].some(b =>
+                    b.offsetParent !== null && /log out|退出登录/i.test(b.innerText || ''));
+            }, { timeout: 15000 });
+        } catch {}
+
+        const logoutClicked = await page.evaluate(() => {
+            const btn = [...document.querySelectorAll('button')].find(b =>
+                b.offsetParent !== null && /log out|退出登录/i.test(b.innerText || '')) ||
+                document.querySelector('button.el-button--danger.is-plain');
+            btn?.click();
+            return btn ? (btn.innerText || '').trim().slice(0, 40) : null;
+        });
+        log(logoutClicked ? `🖱️ Click "${logoutClicked}"` : '⚠️ Không thấy nút Log out');
+        await sleep(3500);
+
+        let logoutState = await page.evaluate(() => {
+            const d = document.querySelector('#login-dialog');
+            return {
+                url: location.href,
+                loginVisible: !!(d && d.offsetParent !== null)
+            };
+        });
+        if (!logoutState.loginVisible) {
+            await page.goto('https://cloud.vmoscloud.com/', { waitUntil: 'domcontentloaded' });
+            await sleep(3000);
+            logoutState = await page.evaluate(() => {
+                const d = document.querySelector('#login-dialog');
+                return {
+                    url: location.href,
+                    loginVisible: !!(d && d.offsetParent !== null)
+                };
+            });
+        }
+        log('🚪 Logout state: ' + JSON.stringify(logoutState));
 
         await page.evaluate(() => {
-            document.querySelector('button.el-button--danger.is-plain')?.click();
-        });
-        await sleep(3000);
-        await page.evaluate(() => { try { localStorage.clear(); } catch {} }).catch(() => {});
-        log('🚪 Đã logout');
+            try { localStorage.clear(); sessionStorage.clear(); } catch {}
+        }).catch(() => {});
+        log(logoutState.loginVisible ? '🚪 Đã logout (login dialog hiện)' : '⚠️ Đã click logout nhưng chưa thấy login dialog');
 
         // ============================================================
         // RESULT
