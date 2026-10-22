@@ -2,6 +2,7 @@ import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createMail } from './lib/mailtm.js';
+import { createInboxToken } from './lib/inbox-store.js';
 import { solveAliyunPuzzle } from './lib/aliyun-captcha.js';
 import { prepareProxy, stopProxy } from './lib/proxy.js';
 import { ensureDisplay, ensureWarpService } from './lib/env-check.js';
@@ -452,6 +453,12 @@ export async function runBot(config, socket, onDone) {
         setStep(2, 'Tạo email');
         mail = await createMail(log); // { provider, address, password, pollOTP(opts) }
         log(`📧 Provider: ${mail.provider} | Email: ${mail.address}`);
+
+        // Token 24h để mở lại hòm thư OTP sau khi tạo account
+        const inbox = createInboxToken(mail);
+        const inboxToken = inbox.token;
+        const inboxExpiresAt = inbox.expiresAt;
+        log(`🔑 Token OTP (24h): ${inboxToken} — hết hạn ${new Date(inboxExpiresAt).toLocaleString('vi-VN')}`);
 
         // ============================================================
         // BƯỚC 3: Launch browser
@@ -1014,6 +1021,8 @@ export async function runBot(config, socket, onDone) {
         const result = {
             email: mail.address,
             password: newPassword,
+            token: inboxToken,
+            tokenExpiresAt: inboxExpiresAt,
             mailPassword: mail.password,
             provider: mail.provider,
             timestamp: new Date().toISOString()
@@ -1023,7 +1032,7 @@ export async function runBot(config, socket, onDone) {
         log('════════════════════════════════════════════');
         log('✅ HOÀN TẤT');
         log(`📧 Provider: ${result.provider}`);
-        log(`📋 Format: ${result.email}|${result.password}|${result.mailPassword || '(no password)'}`);
+        log(`📋 Format: ${result.email}|${result.password}|${result.token}`);
         log('════════════════════════════════════════════');
 
         socket.emit('result', result);

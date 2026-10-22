@@ -11,6 +11,7 @@
     .card { background: #1e1e2e; border: 1px solid #45475a; border-radius: 10px; padding: 16px; margin-bottom: 14px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     label { display: block; font-size: 12px; color: #a6adc8; margin: 10px 0 5px; font-weight: bold; }
     input[type="text"], select { width: 100%; padding: 10px 12px; background: #313244; border: 1px solid #45475a; color: #cdd6f4; border-radius: 6px; font-family: inherit; font-size: 13px; }
+    input[type="text"]:focus, select:focus { outline: none; border-color: #89b4fa; }
     input[type="checkbox"] { margin-right: 8px; transform: scale(1.2); cursor: pointer; }
     .checkbox-group { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
     .checkbox-group label { display: flex; align-items: center; margin: 0; font-weight: normal; cursor: pointer; }
@@ -24,53 +25,143 @@
     .ok { color: #a6e3a1; }
     .warn { color: #f9e2af; }
     .step { color: #89b4fa; font-weight: bold; margin-top: 8px; }
-    .header-line { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .header-line { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; }
     .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
     .status-dot.wait { background: #f9e2af; }
     .status-dot.run { background: #89b4fa; animation: pulse 1.5s infinite; }
     .status-dot.done { background: #a6e3a1; }
     @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+    /* TABS */
+    .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+    .tab { flex: 1; background: #1e1e2e; color: #a6adc8; border: 1px solid #45475a; padding: 12px; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: bold; font-size: 14px; transition: 0.2s; }
+    .tab:hover { border-color: #89b4fa; color: #cdd6f4; }
+    .tab.active { background: #89b4fa; color: #11111b; border-color: #89b4fa; }
+
+    /* OTP INBOX */
+    .row { display: flex; gap: 10px; align-items: stretch; }
+    .row input { flex: 1; min-width: 0; }
+    .btn { background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 6px; padding: 10px 14px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: bold; white-space: nowrap; transition: 0.2s; }
+    .btn:hover:not(:disabled) { border-color: #89b4fa; color: #89b4fa; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn.green { background: #a6e3a1; color: #11111b; border-color: #a6e3a1; }
+    .btn.green:hover:not(:disabled) { background: #94e2d5; border-color: #94e2d5; color: #11111b; }
+    .btn.ghost { background: transparent; }
+    .hint { font-size: 11px; color: #6c7086; margin-top: 8px; line-height: 1.6; }
+    .inbox-address { font-weight: bold; color: #89b4fa; word-break: break-all; font-size: 14px; }
+    .inbox-meta { font-size: 11px; color: #a6adc8; margin-top: 5px; line-height: 1.6; word-break: break-word; }
+    .inbox-actions { display: flex; gap: 8px; flex-shrink: 0; }
+    .alert { padding: 10px 12px; border-radius: 6px; font-size: 12px; margin-top: 12px; line-height: 1.6; word-break: break-word; }
+    .alert.err { background: rgba(243,139,168,0.12); border: 1px solid #f38ba8; color: #f38ba8; }
+    .alert.warn { background: rgba(249,226,175,0.10); border: 1px solid #f9e2af; color: #f9e2af; }
+    .alert.ok { background: rgba(166,227,161,0.10); border: 1px solid #a6e3a1; color: #a6e3a1; }
+    .inbox-list { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .mail-item { background: #181825; border: 1px solid #313244; border-radius: 8px; padding: 12px; cursor: pointer; transition: 0.2s; }
+    .mail-item:hover { border-color: #89b4fa; }
+    .mail-item.open { border-color: #89b4fa; }
+    .mail-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+    .mail-subject { font-weight: bold; color: #cdd6f4; font-size: 13px; word-break: break-word; }
+    .mail-date { color: #6c7086; font-size: 11px; white-space: nowrap; }
+    .mail-from { color: #a6adc8; font-size: 11px; margin-top: 4px; word-break: break-all; }
+    .mail-preview { color: #6c7086; font-size: 12px; margin-top: 8px; line-height: 1.5; word-break: break-word; }
+    .otp-row { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .otp-badge { background: #a6e3a1; color: #11111b; font-weight: bold; padding: 5px 10px; border-radius: 4px; font-size: 13px; letter-spacing: 1px; border: none; font-family: inherit; }
+    button.otp-badge { cursor: pointer; }
+    button.otp-badge:hover { background: #94e2d5; }
+    .mail-body { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #313244; color: #a6adc8; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
+    .empty { text-align: center; color: #6c7086; padding: 26px 12px; font-size: 13px; line-height: 1.8; }
+    .result-format { margin-bottom: 10px; font-size: 15px; }
+    .code-pill { color: #89b4fa; background: #313244; padding: 4px 8px; border-radius: 4px; word-break: break-all; }
+    .result-detail { font-size: 13px; color: #a6adc8; line-height: 1.9; }
+    .result-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-copy { background: #89b4fa; color: #11111b; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-family: inherit; }
+    .btn-copy:hover { background: #b4befe; }
+    @media (max-width: 600px) {
+        .row { flex-direction: column; }
+        .header-line { flex-direction: column; align-items: flex-start; }
+        .inbox-actions { width: 100%; }
+        .inbox-actions .btn { flex: 1; }
+    }
 </style>
 <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 <h1>🌐 VMOS Auto Tool</h1>
 
-<div class="card">
-    <div class="header-line">
-        <label style="margin:0;">Cấu hình</label>
-        <div><span class="status-dot wait" id="statusDot"></span><span id="statusText" style="font-size:12px;color:#a6adc8;">Chờ lệnh</span></div>
-    </div>
-    
-    <label>Browser Engine</label>
-    <select id="browser">
-        <option value="auto">Auto Detect (Chromium ưu tiên)</option>
-        <option value="chromium">Chromium (Kali Linux)</option>
-        <option value="chrome">Google Chrome</option>
-    </select>
-
-    <label>Browser Path (để trống → tự tìm)</label>
-    <input type="text" id="browserPath" placeholder="/usr/bin/chromium">
-
-    <div class="checkbox-group">
-        <label><input type="checkbox" id="headless"> Chạy Headless (⚠️ Dễ bị Cloudflare chặn)</label>
-        <label><input type="checkbox" id="useWarp"> Rotate IP qua WARP (Yêu cầu warp-cli)</label>
-    </div>
-
-    <button class="primary" id="startBtn">🚀 Bắt đầu tạo Account</button>
+<div class="tabs">
+    <button class="tab active" type="button" data-panel="panel-create">🚀 Tạo Account</button>
+    <button class="tab" type="button" data-panel="panel-otp">📥 Nhận OTP</button>
 </div>
 
-<div class="card">
-    <div class="header-line">
-        <label style="margin:0;">Tiến trình Bot</label>
-        <button id="clearLogs" style="background:none;border:none;color:#6c7086;cursor:pointer;font-size:12px;">Xoá Log</button>
+<!-- ============================================================
+     TAB 1: TẠO ACCOUNT
+     ============================================================ -->
+<div id="panel-create" class="tab-panel">
+    <div class="card">
+        <div class="header-line">
+            <label style="margin:0;">Cấu hình</label>
+            <div><span class="status-dot wait" id="statusDot"></span><span id="statusText" style="font-size:12px;color:#a6adc8;">Chờ lệnh</span></div>
+        </div>
+
+        <label>Browser Engine</label>
+        <select id="browser">
+            <option value="auto">Auto Detect (Chromium ưu tiên)</option>
+            <option value="chromium">Chromium (Kali Linux)</option>
+            <option value="chrome">Google Chrome</option>
+        </select>
+
+        <label>Browser Path (để trống → tự tìm)</label>
+        <input type="text" id="browserPath" placeholder="/usr/bin/chromium">
+
+        <div class="checkbox-group">
+            <label><input type="checkbox" id="headless"> Chạy Headless (⚠️ Dễ bị Cloudflare chặn)</label>
+            <label><input type="checkbox" id="useWarp"> Rotate IP qua WARP (Yêu cầu warp-cli)</label>
+        </div>
+
+        <button class="primary" id="startBtn">🚀 Bắt đầu tạo Account</button>
     </div>
-    <div id="logs">Sẵn sàng...</div>
+
+    <div class="card">
+        <div class="header-line">
+            <label style="margin:0;">Tiến trình Bot</label>
+            <button id="clearLogs" style="background:none;border:none;color:#6c7086;cursor:pointer;font-size:12px;">Xoá Log</button>
+        </div>
+        <div id="logs">Sẵn sàng...</div>
+    </div>
+
+    <div class="card">
+        <label>Kết quả:</label>
+        <div id="result"></div>
+    </div>
 </div>
 
-<div class="card">
-    <label>Kết quả:</label>
-    <div id="result"></div>
+<!-- ============================================================
+     TAB 2: NHẬN OTP BẰNG TOKEN (24H)
+     ============================================================ -->
+<div id="panel-otp" class="tab-panel" style="display:none;">
+    <div class="card">
+        <label for="otpToken">Token OTP</label>
+        <div class="row">
+            <input type="text" id="otpToken" placeholder="Dán token hoặc cả dòng email|pass|token" autocomplete="off" spellcheck="false">
+            <button class="btn green" id="openInboxBtn" type="button">📥 Mở hòm thư</button>
+        </div>
+        <div class="hint">Token chỉ tồn tại <strong>1 ngày</strong> trên server kể từ lúc tạo account. Hết hạn → cần tạo account mới để lấy token mới.</div>
+    </div>
+
+    <div class="card" id="inboxCard" style="display:none;">
+        <div class="header-line">
+            <div>
+                <div id="inboxAddress" class="inbox-address">—</div>
+                <div id="inboxMeta" class="inbox-meta"></div>
+            </div>
+            <div class="inbox-actions">
+                <button class="btn" id="reloadInboxBtn" type="button">🔄 Reload</button>
+                <button class="btn ghost" id="changeTokenBtn" type="button">🔑 Đổi token</button>
+            </div>
+        </div>
+        <div id="inboxAlert" class="alert" style="display:none;"></div>
+        <div id="inboxList" class="inbox-list"></div>
+    </div>
 </div>
 
 <script src="app.js"></script>

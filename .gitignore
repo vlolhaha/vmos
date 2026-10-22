@@ -1,5 +1,6 @@
 node_modules/
 .browsers/
+data/
 debug-*.png
 error-*.png
 *.log
