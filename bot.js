@@ -1,5 +1,6 @@
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createMail } from './lib/mailtm.js';
 import { solveAliyunPuzzle } from './lib/aliyun-captcha.js';
 import { prepareProxy, stopProxy } from './lib/proxy.js';
@@ -92,6 +93,98 @@ async function launchBrowser(config, proxyInfo, log) {
 async function loginWithPassword(page, account, password, log) {
     log('🔐 Đăng nhập lại bằng mật khẩu...');
 
+    // Ưu tiên login qua API: sau khi đổi password, UI có thể còn state logout
+    // và trả "operation failed" dù API login hoàn toàn OK.
+    try {
+        const passwordHash = createHash('md5').update(password).digest('hex');
+        const apiLogin = await page.evaluate(async ({ account, passwordHash }) => {
+            const r = await fetch('https://api.vmoscloud.com/vcpcloud/api/user/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mobilePhone: account,
+                    loginType: 1,
+                    password: passwordHash,
+                    channel: 'web'
+                })
+            });
+            let json = null;
+            try { json = await r.json(); } catch {}
+            return { status: r.status, json };
+        }, { account, passwordHash });
+
+        const data = apiLogin?.json?.data;
+        if (apiLogin?.json?.code === 200 && data?.token && data?.userId) {
+            await page.evaluate((d) => {
+                localStorage.setItem('token', d.token);
+                localStorage.setItem('userId', String(d.userId));
+                let users = [];
+                try { users = JSON.parse(localStorage.getItem('users') || '[]'); } catch {}
+                if (!Array.isArray(users)) users = [];
+                if (!users.some(u => String(u.userId) === String(d.userId))) {
+                    users.push({
+                        userId: d.userId,
+                        customerId: d.customerId,
+                        nickName: d.nickName,
+                        token: d.token,
+                        mobilePhone: d.mobilePhone
+                    });
+                }
+                localStorage.setItem('users', JSON.stringify(users));
+            }, data);
+            await page.setCookie(
+                { name: 'token', value: data.token, domain: '.vmoscloud.com', path: '/' },
+                { name: 'userId', value: String(data.userId), domain: '.vmoscloud.com', path: '/' }
+            );
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+            try {
+                await page.waitForFunction(() => {
+                    const d = document.querySelector('#login-dialog');
+                    return !d || d.offsetParent === null;
+                }, { timeout: 20000 });
+            } catch {}
+            const state = await page.evaluate(() => {
+                const d = document.querySelector('#login-dialog');
+                return {
+                    url: location.href,
+                    loginVisible: !!(d && d.offsetParent !== null),
+                    token: !!localStorage.getItem('token')
+                };
+            });
+            if (!state.loginVisible) {
+                log('✅ Đăng nhập lại bằng API OK');
+                return data;
+            }
+            log('⚠️ API login OK nhưng UI vẫn hiện login dialog: ' + JSON.stringify(state));
+        } else {
+            log('⚠️ API login thất bại: ' + JSON.stringify(apiLogin).slice(0, 300));
+        }
+    } catch (e) {
+        log('⚠️ API login lỗi: ' + e.message);
+    }
+
+    log('↩️ Fallback đăng nhập bằng UI...');
+
+    // Đưa app về trạng thái sạch trước khi login UI (tránh token cũ còn trong bộ nhớ)
+    try {
+        await page.goto('https://cloud.vmoscloud.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.waitForFunction(() => {
+            const d = document.querySelector('#login-dialog');
+            return d && d.offsetParent !== null;
+        }, { timeout: 15000 });
+        await sleep(1000);
+    } catch (e) {
+        const cleanAuth = await page.evaluate(() => ({
+            token: localStorage.getItem('token') || '',
+            userId: localStorage.getItem('userId') || ''
+        })).catch(() => ({ token: '', userId: '' }));
+        if (cleanAuth.token) {
+            log('✓ Session đã hoạt động sau reload, bỏ qua UI login');
+            return { token: cleanAuth.token, userId: cleanAuth.userId };
+        }
+        log('⚠️ Không mở được trang login sạch: ' + e.message);
+    }
+
     // VMOS trả checkEmail data:true cho tài khoản vừa tạo (dù đã có password)
     // → UI nhảy sang form đăng ký. Chặn response này để ép hiện panel password.
     const onRequest = (req) => {
@@ -119,8 +212,9 @@ async function loginWithPassword(page, account, password, log) {
             try { req.continue(); } catch {}
         }
     };
-    await page.setRequestInterception(true);
+    // Đăng ký listener TRƯỚC khi bật interception để tránh request bị treo
     page.on('request', onRequest);
+    await page.setRequestInterception(true);
 
     try {
         await page.waitForSelector('#login-dialog', { timeout: 15000 });
@@ -216,6 +310,115 @@ async function loginWithPassword(page, account, password, log) {
 }
 
 // ============================================================
+// AUTH — đồng bộ token từ localStorage sang cookie trước khi reload
+// (site mới đọc token từ cookie lúc bootstrap; localStorage có thể chưa kịp ghi)
+// ============================================================
+async function syncAuthState(page, log, sessionAuth) {
+    let auth = await page.evaluate(() => ({
+        token: localStorage.getItem('token') || '',
+        userId: localStorage.getItem('userId') || '',
+        users: localStorage.getItem('users') || ''
+    })).catch(() => ({ token: '', userId: '', users: '' }));
+
+    // Fallback: dùng token bắt được từ response đăng nhập/đăng ký
+    if ((!auth.token || !auth.userId) && sessionAuth?.token) {
+        try {
+            await page.evaluate((s) => {
+                const user = {
+                    userId: s.userId,
+                    customerId: s.customerId,
+                    nickName: s.nickName || 'VMOS Cloud',
+                    token: s.token,
+                    mobilePhone: s.mobilePhone || ''
+                };
+                localStorage.setItem('token', s.token);
+                localStorage.setItem('userId', String(s.userId));
+                let users = [];
+                try { users = JSON.parse(localStorage.getItem('users') || '[]'); } catch {}
+                if (Array.isArray(users) && !users.some(u => String(u.userId) === String(s.userId))) {
+                    users.push(user);
+                }
+                localStorage.setItem('users', JSON.stringify(users));
+            }, sessionAuth);
+            log('🔑 Đã khôi phục auth token từ response đăng nhập');
+            auth = await page.evaluate(() => ({
+                token: localStorage.getItem('token') || '',
+                userId: localStorage.getItem('userId') || '',
+                users: localStorage.getItem('users') || ''
+            }));
+        } catch (e) {
+            log('⚠️ Không khôi phục được auth: ' + e.message);
+        }
+    }
+
+    if (!auth.token) {
+        log('⚠️ Không thấy auth token trong localStorage');
+        return auth;
+    }
+
+    try {
+        const cookies = [{ name: 'token', value: auth.token, domain: '.vmoscloud.com', path: '/' }];
+        if (auth.userId) {
+            cookies.push({ name: 'userId', value: String(auth.userId), domain: '.vmoscloud.com', path: '/' });
+        }
+        await page.setCookie(...cookies);
+        log(`🔑 Auth OK: token ${auth.token.length} ký tự, userId=${auth.userId || '?'}`);
+    } catch (e) {
+        log('⚠️ Không sync được auth cookie: ' + e.message);
+    }
+    return auth;
+}
+
+// ============================================================
+// SETTINGS — mở trang và chờ form render xong (site lazy-load chunk)
+// ============================================================
+async function openSettingsPage(page, log, sessionAuth) {
+    await syncAuthState(page, log, sessionAuth);
+    await page.goto('https://cloud.vmoscloud.com/setting', { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+    const start = Date.now();
+    let state = null;
+    while (Date.now() - start < 25000) {
+        state = await page.evaluate(() => {
+            const visible = el => !!(el && el.offsetParent !== null);
+            const link = [...document.querySelectorAll('a, button')].find(el => {
+                if (!visible(el)) return false;
+                const text = (el.innerText || el.textContent || '').trim();
+                return /change password/i.test(text) && text.length < 40;
+            });
+            const dlg = document.querySelector('#login-dialog');
+            return {
+                url: location.href,
+                loginVisible: !!(dlg && visible(dlg)),
+                hasLink: !!link
+            };
+        });
+        if (state.hasLink && !state.loginVisible) {
+            log('✓ Trang Settings đã sẵn sàng');
+            return state;
+        }
+        // Login dialog còn hiện quá lâu → session đã mất, không chờ vô ích
+        if (state.loginVisible && Date.now() - start > 12000) break;
+        await sleep(500);
+    }
+
+    await page.screenshot({ path: 'debug-step8-setting.png', fullPage: true });
+    const diag = await page.evaluate(() => {
+        const visible = el => !!(el && el.offsetParent !== null);
+        const dlg = document.querySelector('#login-dialog');
+        return {
+            url: location.href,
+            loginVisible: !!(dlg && visible(dlg)),
+            token: localStorage.getItem('token') ? `present(${localStorage.getItem('token').length})` : 'missing',
+            userId: localStorage.getItem('userId') || 'missing',
+            cookieToken: /(?:^|;\s*)token=/.test(document.cookie),
+            text: (document.body.innerText || '').slice(0, 800)
+        };
+    }).catch(() => ({}));
+    throw new Error('Không mở được trang Settings/Change Password sau 25s: ' + JSON.stringify(diag));
+}
+
+// ============================================================
 // MAIN BOT — 10 BƯỚC
 // ============================================================
 export async function runBot(config, socket, onDone) {
@@ -272,6 +475,7 @@ export async function runBot(config, socket, onDone) {
         let initCaptcha = null;
         let passwordChangeOk = null;
         let claimTrialResult = null;
+        let sessionAuth = null;
 
         page.on('request', (req) => {
             try {
@@ -327,6 +531,23 @@ export async function runBot(config, socket, onDone) {
                         if (/\/newUserBenefits\/claimTrial/.test(url)) {
                             try { claimTrialResult = JSON.parse(body); } catch {}
                         }
+                        // Bắt token từ response đăng nhập/đăng ký để khôi phục nếu
+                        // localStorage chưa kịp ghi trước khi site redirect.
+                        try {
+                            const data = JSON.parse(body)?.data;
+                            if (data?.token && data?.userId) {
+                                sessionAuth = {
+                                    token: data.token,
+                                    userId: data.userId,
+                                    customerId: data.customerId,
+                                    mobilePhone: data.mobilePhone,
+                                    nickName: data.nickName
+                                };
+                                if (debug) {
+                                    log(`🔑 Captured auth từ ${url.replace('https://api.vmoscloud.com/vcpcloud/api/', '')}`);
+                                }
+                            }
+                        } catch {}
                     } catch {}
                 }
             } catch {}
@@ -553,16 +774,16 @@ export async function runBot(config, socket, onDone) {
         const newPassword = 'Vmos@' + Math.random().toString(36).slice(2, 10) + 'A1';
         log('🔐 Password mới: ' + newPassword);
 
-        await page.goto('https://cloud.vmoscloud.com/setting', { waitUntil: 'domcontentloaded' });
-        await sleep(4000);
+        await openSettingsPage(page, log, sessionAuth);
 
         log('🖱️ Click "Change Password"...');
         const clickedChange = await page.evaluate(() => {
-            const visible = el => el && el.offsetParent !== null;
-            const candidates = [...document.querySelectorAll('a, button, span, div')]
-                .filter(el => visible(el) && /change password/i.test(el.textContent || '') && (el.textContent || '').trim().length < 40);
-            if (!candidates.length) return false;
-            candidates[candidates.length - 1].click();
+            const visible = el => !!(el && el.offsetParent !== null);
+            const candidates = [...document.querySelectorAll('a, button')]
+                .filter(el => visible(el) && /change password/i.test((el.innerText || el.textContent || '').trim()) && (el.innerText || el.textContent || '').trim().length < 40);
+            const target = candidates.find(el => el.tagName === 'A') || candidates[0];
+            if (!target) return false;
+            target.click();
             return true;
         });
         if (!clickedChange) {
@@ -570,26 +791,38 @@ export async function runBot(config, socket, onDone) {
             throw new Error('Không tìm thấy "Change Password". Xem debug-step8-setting.png');
         }
 
-        // Chờ dialog đổi mật khẩu
-        await page.waitForSelector('.el-dialog', { timeout: 10000 });
-        await sleep(1200);
-        const dialogState = await page.evaluate(() => {
-            const d = document.querySelector('.el-dialog');
-            if (!d) return null;
-            return {
-                text: d.innerText.replace(/\s+/g, ' ').slice(0, 600),
-                inputs: [...d.querySelectorAll('input')].map(i => ({
-                    type: i.type, placeholder: i.placeholder, value: i.value, disabled: i.disabled
-                }))
-            };
+        // Chờ đúng dialog đổi mật khẩu (không phải dialog ẩn nào khác)
+        await page.waitForFunction(() => {
+            return [...document.querySelectorAll('.el-dialog')].some(d =>
+                d.offsetParent !== null &&
+                /change password/i.test(d.innerText || '') &&
+                !!d.querySelector('input[type="password"]')
+            );
+        }, { timeout: 15000 });
+        await sleep(500);
+
+        const pwdDialogHandle = await page.evaluateHandle(() => {
+            return [...document.querySelectorAll('.el-dialog')].find(d =>
+                d.offsetParent !== null &&
+                /change password/i.test(d.innerText || '') &&
+                !!d.querySelector('input[type="password"]')
+            );
         });
+        const pwdDialog = pwdDialogHandle.asElement();
+        if (!pwdDialog) throw new Error('Không tìm thấy dialog đổi mật khẩu đang hiển thị');
+
+        const dialogState = await pwdDialog.evaluate(d => ({
+            text: d.innerText.replace(/\s+/g, ' ').slice(0, 600),
+            inputs: [...d.querySelectorAll('input')].map(i => ({
+                type: i.type, placeholder: i.placeholder, value: i.value, disabled: i.disabled
+            }))
+        }));
         log('🧾 Dialog state: ' + JSON.stringify(dialogState));
 
         log('📨 Click "Get code"...');
         const resetOTPTimeStart = Date.now();
-        const clickedCode = await page.evaluate(() => {
-            const el = document.querySelector('.el-dialog .get-verify-code') ||
-                document.querySelector('.get-verify-code');
+        const clickedCode = await pwdDialog.evaluate(d => {
+            const el = d.querySelector('.get-verify-code');
             if (!el) return false;
             el.click();
             return true;
@@ -610,7 +843,6 @@ export async function runBot(config, socket, onDone) {
         });
 
         log('⌨️  Điền OTP + password mới...');
-        const pwdDialog = await page.$('.el-dialog');
         const codeInput = await pwdDialog.$('input[placeholder*="verification" i], input[placeholder*="mã xác minh" i]');
         const pwInput = await pwdDialog.$('input[type="password"]');
         if (!codeInput || !pwInput) {
@@ -656,7 +888,8 @@ export async function runBot(config, socket, onDone) {
         }
         if (loginVisible) {
             log('🔐 Session đã bị logout sau đổi password');
-            await loginWithPassword(page, mail.address, newPassword, log);
+            const reloginAuth = await loginWithPassword(page, mail.address, newPassword, log);
+            if (reloginAuth?.token) sessionAuth = reloginAuth;
         } else {
             log('⚠️ Không thấy login dialog sau đổi password');
         }
@@ -668,6 +901,7 @@ export async function runBot(config, socket, onDone) {
         // ============================================================
         setStep(9, 'Claim trial cloud phone');
         log('🌐 Mở trang New User Benefits...');
+        await syncAuthState(page, log, sessionAuth);
         await page.goto('https://cloud.vmoscloud.com/new-user-benefits', { waitUntil: 'domcontentloaded' });
         await sleep(5000);
 
@@ -730,8 +964,7 @@ export async function runBot(config, socket, onDone) {
         // BƯỚC 10: Logout
         // ============================================================
         setStep(10, 'Logout + cleanup');
-        await page.goto('https://cloud.vmoscloud.com/setting', { waitUntil: 'domcontentloaded' });
-        await sleep(3000);
+        await openSettingsPage(page, log, sessionAuth);
 
         try {
             await page.waitForFunction(() => {
