@@ -1,0 +1,42 @@
+name: vmos
+
+services:
+  vmos:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vmos-auto:latest
+    container_name: vmos-auto
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      NODE_ENV: production
+      PORT: "${PORT:-3000}"
+      DISPLAY: ":99"
+      XVFB_SCREEN: "${XVFB_SCREEN:-1280x900x24}"
+      BROWSER_PATH: "${BROWSER_PATH:-/usr/bin/chromium}"
+      WARP_ENABLED: "${WARP_ENABLED:-false}"
+      TZ: "${TZ:-Asia/Ho_Chi_Minh}"
+      VMOS_DEBUG: "${VMOS_DEBUG:-0}"
+    volumes:
+      - vmos-data:/app/data
+    shm_size: "1gb"
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  vmos-data:
+    name: vmos-data

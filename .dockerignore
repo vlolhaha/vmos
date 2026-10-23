@@ -1,0 +1,15 @@
+.git
+.gitignore
+node_modules
+data
+.env
+.env.*
+debug-*.png
+error-*.png
+*.log
+Dockerfile
+docker-compose*.yml
+docker-compose*.yaml
+DOCKER.md
+deploy.sh
+bootstrap.sh
