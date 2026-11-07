@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log*
+.git
+.gitignore
+*.md
+.env
+.env.*
+data/
+debug-*.png
+error-*.png
+*.log
+.browsers/
+.vscode/
+.idea/
+railway.toml
+railway.json
+DOCKER.md

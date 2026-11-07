@@ -1,0 +1,15 @@
+{
+  "name": "vmos-auto",
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "puppeteer-core": "^23.5.0",
+    "sharp": "^0.33.5",
+    "dotenv": "^16.4.5"
+  }
+}
