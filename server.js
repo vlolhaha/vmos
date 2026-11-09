@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import 'dotenv/config';
 import { runBot } from './bot.js';
+import { runVsPhoneBot } from './lib/vsphone-bot.js';
 import { listInbox, readInboxMessage } from './lib/mailtm.js';
 import { getInboxToken, purgeExpiredInboxTokens } from './lib/inbox-store.js';
 import { bootstrapEnv } from './lib/env-check.js';
@@ -101,15 +102,19 @@ io.on('connection', (socket) => {
         warpEnabled: process.env.WARP_ENABLED === 'true'
     });
 
-    socket.on('start-bot', async (config) => {
+    socket.on('start-bot', async (rawConfig) => {
         if (running) {
             socket.emit('log', '❌ Đang có bot chạy, chờ xong!');
             return;
         }
         running = true;
-        socket.emit('log', '🚀 Bắt đầu...');
 
-        runBot(config, socket, () => {
+        const config = rawConfig || {};
+        const service = String(config.service || 'vmos').toLowerCase();
+        const runner = service === 'vsphone' ? runVsPhoneBot : runBot;
+        socket.emit('log', `🚀 Bắt đầu ${service === 'vsphone' ? 'VSPhone' : 'VMOS'}...`);
+
+        runner(config, socket, () => {
             running = false;
             socket.emit('done');
         }).catch(e => {

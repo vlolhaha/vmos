@@ -63,7 +63,7 @@ function findBrowser(config) {
 // ============================================================
 // LAUNCH BROWSER
 // ============================================================
-async function launchBrowser(config, proxyInfo, log) {
+export async function launchBrowser(config, proxyInfo, log) {
     if (process.platform === 'linux' && !config.headless) {
         const hasDisplay = await ensureDisplay(log);
         if (!hasDisplay) throw new Error('Không có DISPLAY. Chạy: apt install -y xvfb');
@@ -1157,6 +1157,7 @@ export async function runBot(config, socket, onDone) {
         // RESULT
         // ============================================================
         const result = {
+            service: 'vmos',
             email: mail.address,
             password: newPassword,
             token: inboxToken,

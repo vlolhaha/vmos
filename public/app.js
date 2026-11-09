@@ -2,6 +2,7 @@ const socket = io();
 const $ = id => document.getElementById(id);
 
 const startBtn = $('startBtn');
+const serviceSelect = $('service');
 const logs = $('logs');
 const result = $('result');
 const statusDot = $('statusDot');
@@ -62,11 +63,24 @@ function activateTab(panelId) {
 
 tabs.forEach(tab => tab.addEventListener('click', () => activateTab(tab.dataset.panel)));
 
+function updateServiceUi() {
+    const isVsPhone = serviceSelect.value === 'vsphone';
+    const shareTab = tabs.find(t => t.dataset.panel === 'panel-share');
+    if (shareTab) shareTab.style.display = isVsPhone ? 'none' : '';
+    if (isVsPhone && $('panel-share').style.display === 'block') {
+        activateTab('panel-create');
+    }
+}
+
+serviceSelect.addEventListener('change', updateServiceUi);
+updateServiceUi();
+
 // ============================================================
 // START BOT
 // ============================================================
 startBtn.onclick = () => {
     const config = {
+        service: serviceSelect.value,
         browser: $('browser').value,
         browserPath: $('browserPath').value.trim() || null,
         headless: $('headless').checked,
@@ -113,6 +127,8 @@ openShareBtn.addEventListener('click', () => {
 // RESULT
 // ============================================================
 function renderResult(data) {
+    const serviceName = data.service === 'vsphone' ? 'VSPhone' : 'VMOS';
+    const showLink = data.service !== 'vsphone';
     const formatAccount = `${data.email}|${data.password}|${data.token || ''}`;
     const formatLink = data.shareLink || '';
 
@@ -171,14 +187,16 @@ function renderResult(data) {
     details.style.marginTop = '15px';
 
     const rows = [
-        ['📧 Email VMOS', data.email],
-        ['🔑 Pass VMOS', data.password],
+        [`📧 Email ${serviceName}`, data.email],
+        [`🔑 Pass ${serviceName}`, data.password],
         ['🎟️ Token OTP', data.token || '(không có)'],
         ['⏳ Token hết hạn', data.tokenExpiresAt
             ? new Date(data.tokenExpiresAt).toLocaleString('vi-VN')
             : 'sau 24 giờ']
     ];
     if (data.mailPassword) rows.push(['📮 Pass Mail', data.mailPassword]);
+    if (data.userId) rows.push(['🆔 User ID', data.userId]);
+    if (data.accountToken) rows.push([`🔐 Token phiên ${serviceName}`, data.accountToken]);
     rows.push(['🕐 Time', new Date(data.timestamp).toLocaleString('vi-VN')]);
 
     for (const [label, value] of rows) {
@@ -219,7 +237,11 @@ function renderResult(data) {
         actions.appendChild(openShareTabBtn);
     }
 
-    result.append(accLine, linkLine, details, actions);
+    if (showLink) {
+        result.append(accLine, linkLine, details, actions);
+    } else {
+        result.append(accLine, details, actions);
+    }
 }
 
 // ============================================================
@@ -519,8 +541,8 @@ socket.on('log', (msg) => {
     log(msg, cls);
 });
 
-socket.on('step', ({ n, name }) => {
-    setStatus('run', `Bước ${n}/10: ${name}`);
+socket.on('step', ({ n, name, total }) => {
+    setStatus('run', `Bước ${n}/${total || 10}: ${name}`);
 });
 
 socket.on('result', (data) => {
@@ -532,6 +554,8 @@ socket.on('result', (data) => {
     // Auto điền link
     if (data.shareLink && shareLinkInput) {
         shareLinkInput.value = data.shareLink;
+    } else if (data.service === 'vsphone' && shareLinkInput) {
+        shareLinkInput.value = '';
     }
 
     log('✅ Có kết quả — Kiểm tra khung bên dưới', 'ok');
